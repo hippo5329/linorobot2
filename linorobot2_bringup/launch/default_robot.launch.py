@@ -38,6 +38,12 @@ def generate_launch_description():
         ),
 
         DeclareLaunchArgument(
+            name='micro_ros_baudrate', 
+            default_value='115200',
+            description='micro-ROS baudrate'
+        ),
+
+        DeclareLaunchArgument(
             name='micro_ros_transport',
             default_value='serial',
             description='micro-ROS transport'
@@ -55,7 +61,7 @@ def generate_launch_description():
             executable='micro_ros_agent',
             name='micro_ros_agent',
             output='screen',
-            arguments=['serial', '--dev', LaunchConfiguration("base_serial_port")]
+            arguments=['serial', '--dev', LaunchConfiguration("base_serial_port"), '--baudrate', LaunchConfiguration("micro_ros_baudrate")]
         ),
 
         Node(
