@@ -40,7 +40,7 @@ def launch_rplidar(context, *args, **kwargs):
                 [FindPackageShare('sllidar_ros2'), 'launch', launch_file]
             )),
             launch_arguments={
-                'serial_port': '/dev/rplidar', 
+                'serial_port': LaunchConfiguration('lidar_serial_port'), 
                 'frame_id': LaunchConfiguration('frame_id'),
             }.items()   
         )]
@@ -118,7 +118,7 @@ def generate_launch_description():
             emulate_tty=True,
             remappings=[('scan', LaunchConfiguration('topic_name'))],
             parameters=[{ 
-                'port': '/dev/ydlidar',
+                'port': LaunchConfiguration('lidar_serial_port'),
                 'frame_id': LaunchConfiguration('frame_id'),
                 'ignore_array': '',
                 'baudrate': 128000,
@@ -166,7 +166,7 @@ def generate_launch_description():
             output='screen',
             remappings=[('scan', LaunchConfiguration('topic_name'))],
             parameters=[{
-                'port': '/dev/ttyACM0',
+                'port': LaunchConfiguration('lidar_serial_port'),
                 'baud_rate': 115200, 
                 'frame_id': LaunchConfiguration('frame_id'),
                 'firmware_version': 2
