@@ -88,9 +88,23 @@ def generate_launch_description():
         ),
         
         DeclareLaunchArgument(
+            name='madgwick',
+            default_value='false',
+            description='Use madgwick to fuse imu and magnetometer'
+        ),
+
+        DeclareLaunchArgument(
             name='joy', 
             default_value='false',
             description='Use Joystick'
+        ),
+
+        Node(
+            condition=IfCondition(LaunchConfiguration("madgwick")),
+            package='imu_filter_madgwick',
+            executable='imu_filter_madgwick_node',
+            name='madgwick_filter_node',
+            output='screen',
         ),
 
         Node(
