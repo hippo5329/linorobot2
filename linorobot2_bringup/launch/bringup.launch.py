@@ -86,11 +86,17 @@ def generate_launch_description():
             default_value='/odom',
             description='EKF out odometry topic'
         ),
-        
+
         DeclareLaunchArgument(
             name='madgwick',
             default_value='false',
             description='Use madgwick to fuse imu and magnetometer'
+        ),
+
+        DeclareLaunchArgument(
+            name='orientation_stddev',
+            default_value='0.003162278',
+            description='Madgwick orientation stddev'
         ),
 
         DeclareLaunchArgument(
@@ -105,6 +111,9 @@ def generate_launch_description():
             executable='imu_filter_madgwick_node',
             name='madgwick_filter_node',
             output='screen',
+            parameters=[
+                {'orientation_stddev' : LaunchConfiguration('orientation_stddev')}
+            ]
         ),
 
         Node(
