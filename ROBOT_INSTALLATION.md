@@ -43,7 +43,7 @@ LD06 LD19 STL27L:
     wget https://raw.githubusercontent.com/linorobot/ldlidar/ros2/ldlidar.rules
     sudo cp ldlidar.rules /etc/udev/rules.d
 
-RPLIDAR (A1 A2 A3 C1 S1 S2 S3):
+RPLIDAR (A1 A2M7 A2M8 A2M12 A3 C1 S1 S2 S2E S3 T1):
 
     cd <your_ws>
     git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2

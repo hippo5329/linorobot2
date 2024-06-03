@@ -25,7 +25,7 @@ WORKSPACE="/root/linorobot2_ws"
 
 ROBOT_TYPE_ARRAY=(2wd 4wd mecanum)
 DEPTH_SENSOR_ARRAY=(realsense zed zedm zed2 zed2i oakd oakdlite oakdpro)
-LASER_SENSOR_ARRAY=(ydlidar xv11 ld06 ld19 stl27l a1 a2 a3 c1 s1 s2 s3 ldlidar)
+LASER_SENSOR_ARRAY=(ydlidar xv11 ld06 ld19 stl27l a1 a2m7 a2m8 a2m12 a3 c1 s1 s2 s2e s3 t1 ldlidar)
 LASER_SENSOR_ARRAY+=(${DEPTH_SENSOR_ARRAY[@]})
 
 if [ -z "$LASER_SENSOR" ]
@@ -111,7 +111,15 @@ function install_a1 {
     install_sllidar_ros2
 }
 
-function install_a2 {
+function install_a2m7 {
+    install_sllidar_ros2
+}
+
+function install_a2m8 {
+    install_sllidar_ros2
+}
+
+function install_a2m12 {
     install_sllidar_ros2
 }
 
@@ -131,7 +139,15 @@ function install_s2 {
     install_sllidar_ros2
 }
 
+function install_s2e {
+    install_sllidar_ros2
+}
+
 function install_s3 {
+    install_sllidar_ros2
+}
+
+function install_t1 {
     install_sllidar_ros2
 }
 

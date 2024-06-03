@@ -25,12 +25,16 @@ def launch_rplidar(context, *args, **kwargs):
     lidar_str = context.perform_substitution(LaunchConfiguration('sensor'))
     rplidar_sensors = [
         'a1',
-        'a2',
+        'a2m7',
+        'a2m8',
+        'a2m12',
         'a3',
         'c1',
         's1',
         's2',
+        's2e',
         's3',
+        't1',
     ]
     
     if lidar_str in rplidar_sensors:
@@ -57,12 +61,16 @@ def generate_launch_description():
         'ydlidar',
         'xv11',
         'a1',
-        'a2',
+        'a2m7',
+        'a2m8',
+        'a2m12',
         'a3',
         'c1',
         's1',
         's2',
+        's2e',
         's3',
+        't1',
     ]
 
     return LaunchDescription([
