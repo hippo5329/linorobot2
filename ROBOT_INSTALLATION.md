@@ -46,10 +46,10 @@ LD06 LD19 STL27L:
 RPLIDAR (A1 A2 A3 C1 S1 S2 S3):
 
     cd <your_ws>
-    git clone https://github.com/Slamtec/sllidar_ros2.git
+    git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2
     colcon build
     source  <your_ws>/install/setup.bash
-    sudo cp sllidar_ros2/scripts/rplidar.rules /etc/udev/rules.d
+    sudo cp src/sllidar_ros2/scripts/rplidar.rules /etc/udev/rules.d
 
 #### 1.3 Install depth sensor drivers:
 Intel RealSense:
