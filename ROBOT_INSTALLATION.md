@@ -46,7 +46,7 @@ LD06 LD19 STL27L:
 RPLIDAR (A1 A2M7 A2M8 A2M12 A3 C1 S1 S2 S2E S3 T1):
 
     cd <your_ws>
-    git clone https://github.com/hippo5329/sllidar_ros2.git src/sllidar_ros2
+    git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2
     colcon build
     source  <your_ws>/install/setup.bash
     sudo cp src/sllidar_ros2/scripts/rplidar.rules /etc/udev/rules.d

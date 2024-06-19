@@ -102,7 +102,7 @@ function install_stl27l {
 
 function install_sllidar_ros2 {
     cd $WORKSPACE
-    git clone https://github.com/hippo5329/sllidar_ros2.git src/sllidar_ros2
+    git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2
     colcon build
     source $WORKSPACE/install/setup.bash
 }
