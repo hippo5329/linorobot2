@@ -68,8 +68,7 @@ function install_ydlidar {
     make
     sudo make install
     cd $WORKSPACE
-    git clone https://github.com/YDLIDAR/ydlidar_ros2_driver src/ydlidar_ros2_driver
-    chmod 0777 src/ydlidar_ros2_driver/startup/*
+    git clone -b humble https://github.com/YDLIDAR/ydlidar_ros2_driver src/ydlidar_ros2_driver
     colcon build --symlink-install
     source $WORKSPACE/install/setup.bash
 }

@@ -20,8 +20,7 @@ YDLIDAR:
     make
     sudo make install
     cd <your_ws>
-    git clone https://github.com/YDLIDAR/ydlidar_ros2_driver src/ydlidar_ros2_driver
-    chmod 0777 src/ydlidar_ros2_driver/startup/*
+    git clone -b humble https://github.com/YDLIDAR/ydlidar_ros2_driver src/ydlidar_ros2_driver
     sudo sh src/ydlidar_ros2_driver/startup/initenv.sh
     colcon build --symlink-install
     source <your_ws>/install/setup.bash
