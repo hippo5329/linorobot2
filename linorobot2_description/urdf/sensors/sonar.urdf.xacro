@@ -1,0 +1,12 @@
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="sonar" params="*origin">
+    <link name="sonar_link"/>
+
+    <joint name="sonar_to_base_link" type="fixed">
+      <parent link="base_link"/>
+      <child link="sonar_link"/>
+      <xacro:insert_block name="origin" />
+    </joint>
+
+  </xacro:macro>
+</robot>
