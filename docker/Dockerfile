@@ -67,7 +67,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
         curl \
         libegl1-mesa \
-        libglu1-mesa \ 
+        libglu1-mesa \
         libxv1 \
         libxtst6 \
     && rm -rf /var/lib/apt/lists/*
@@ -75,9 +75,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install VirtualGL
 ARG VIRTUALGL_VER="3.1"
 RUN wget -O /tmp/virtualgl.deb https://zenlayer.dl.sourceforge.net/project/virtualgl/${VIRTUALGL_VER}/virtualgl_${VIRTUALGL_VER}_amd64.deb
-RUN dpkg -i /tmp/virtualgl.deb 
+RUN dpkg -i /tmp/virtualgl.deb
 
-# Install glvnd 
+# Install glvnd
 # Reference: https://github.com/athackst/dockerfiles/blob/main/ros2/humble-cuda.Dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglvnd0 \
@@ -104,7 +104,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN source /opt/ros/${USE_ROS_DISTRO}/setup.bash
-RUN rosdep init 
+RUN rosdep init
 ENV ROS_DISTRO=${USE_ROS_DISTRO}
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
@@ -128,7 +128,7 @@ ENV FASTRTPS_DEFAULT_PROFILES_FILE=/root/.fastrtps.xml
 RUN mkdir -p /root/linorobot2_ws/src/linorobot2
 RUN mkdir -p /root/preinstall/base \
     /root/preinstall/description \
-    /root/preinstall/navigation 
+    /root/preinstall/navigation
 
 COPY ./linorobot2_base/package.xml /root/preinstall/base
 COPY ./linorobot2_description/package.xml /root/preinstall/description
@@ -166,26 +166,17 @@ RUN /bin/bash /root/install_sensors.bash $ROBOT_BASE $LASER_SENSOR $DEPTH_SENSOR
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-vcstool \
-        build-essential \  
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /root/linorobot2_ws
-RUN git clone -b $ROS_DISTRO https://github.com/micro-ROS/micro_ros_setup.git src/micro_ros_setup
+RUN git clone -b $ROS_DISTRO https://github.com/micro-ROS/micro-ROS-Agent.git src/micro-ROS-Agent
+RUN git clone -b $ROS_DISTRO https://github.com/micro-ROS/micro_ros_msgs.git src/micro_ros_msgs
+
 RUN apt-get update \
         && rosdep update --rosdistro=${ROS_DISTRO} \
-        && rosdep install --rosdistro=${ROS_DISTRO} --from-paths src -iry --os=ubuntu:$(lsb_release -sc) --skip-keys micro_ros_agent \
+        && rosdep install --rosdistro=${ROS_DISTRO} --from-paths src -iry --os=ubuntu:$(lsb_release -sc) \
     && rm -rf /var/lib/apt/lists/*
-
-RUN source /opt/ros/$ROS_DISTRO/setup.bash \
-    && colcon build --packages-select micro_ros_setup
-
-RUN source /opt/ros/$ROS_DISTRO/setup.bash  \
-    && source /root/linorobot2_ws/install/setup.bash \
-    && ros2 run micro_ros_setup create_agent_ws.sh
-
-RUN source /opt/ros/$ROS_DISTRO/setup.bash \
-    && source /root/linorobot2_ws/install/setup.bash \
-    && ros2 run micro_ros_setup build_agent.sh
 
 RUN source /opt/ros/$ROS_DISTRO/setup.bash \
     && colcon build

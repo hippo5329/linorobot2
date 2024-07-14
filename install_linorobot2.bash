@@ -183,11 +183,11 @@ function install_zed {
         echo "Linux Machine not supported by Zed Camera"
         exit 1
     fi
-    
+
     chmod +x zed_sdk
     ./zed_sdk -- silent
     cd $WORKSPACE
-    
+
     git clone https://github.com/stereolabs/zed-ros2-wrapper src/zed-ros2-wrapper
     git clone https://github.com/ros-perception/image_common -b $ROS_DISTRO src/image_common #https://github.com/stereolabs/zed-ros2-wrapper#image-transport-and-topic-subscriptions
     rosdep install --from-paths src --ignore-src -r -y
@@ -242,7 +242,7 @@ if [ "$*" == "" ]
         echo
         exit 1
 fi
-        
+
 if [[ "$BASE" != "ci" ]] && !(printf '%s\n' "${ROBOT_TYPE_ARRAY[@]}" | grep -xq $BASE)
     then
         echo "Invalid linorobot base: $1"
@@ -287,7 +287,7 @@ if [[ "$BASE" != "ci" ]]
         echo "Create a linorobot2_ws on your $HOME directory."
         echo "Install linorobot2 ROS2 dependencies."
         echo "Install udev rules on /etc/udev/rules.d folder."
-        echo -n "Enter [y] to continue. " 
+        echo -n "Enter [y] to continue. "
         read reply
         if [[ "$reply" != "y" && "$reply" != "Y" ]]
             then
@@ -324,20 +324,6 @@ if [[ "$BASE" == "ci" ]]
         for key in "${!LASER_SENSOR_ARRAY[@]}"; do  install_${LASER_SENSOR_ARRAY[$key]}; done
 fi
 
-#### 1.4 Download and install micro-ROS:
-cd $WORKSPACE
-git clone -b $ROS_DISTRO https://github.com/micro-ROS/micro_ros_setup.git src/micro_ros_setup
-sudo apt install -y python3-vcstool build-essential
-sudo apt update && rosdep update
-rosdep install --from-path src --ignore-src -y
-colcon build
-source $WORKSPACE/install/setup.bash
-
-#### 1.5 Setup micro-ROS agent:
-ros2 run micro_ros_setup create_agent_ws.sh
-ros2 run micro_ros_setup build_agent.sh
-source $WORKSPACE/install/setup.bash
-
 #### 2.1 Download linorobot2:
 cd $WORKSPACE
 git clone https://github.com/hippo5329/linorobot2 src/linorobot2
@@ -369,7 +355,7 @@ if [[ "$BASE" != "ci" ]]
         fi
         echo
         echo "Do you want to add sourcing of linorobot2_ws on your ~/.bashrc?"
-        echo -n "Yes [y] or No [n]: " 
+        echo -n "Yes [y] or No [n]: "
         read reply
         if [[ "$reply" == "y" || "$reply" == "Y" ]]
             then
