@@ -124,7 +124,7 @@ services:
       - TZ=Etc/UTC
       - SUBFOLDER=/
       - TITLE=Webtop
-      - DISPLAY=:200
+      - DISPLAY=${DISPLAY}
     network_mode: host
     volumes:
       - /path/to/data:/config
@@ -146,6 +146,6 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - $HOME/.Xauthority:/root/.Xauthority
     environment:
-      - DISPLAY=:200
+      - DISPLAY=${DISPLAY}
     devices:
       - /dev/dri:/dev/dri
