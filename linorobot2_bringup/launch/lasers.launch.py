@@ -18,8 +18,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import LaunchConfigurationEquals
-from launch_ros.actions import Node
-
+from launch_ros.actions import Node, SetRemap
 
 def launch_rplidar(context, *args, **kwargs):
     lidar_str = context.perform_substitution(LaunchConfiguration('sensor'))
@@ -36,18 +35,21 @@ def launch_rplidar(context, *args, **kwargs):
         's3',
         't1',
     ]
-    
+
     if lidar_str in rplidar_sensors:
         launch_file = f'sllidar_{lidar_str}_launch.py'
-        return [IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(PathJoinSubstitution(
-                [FindPackageShare('sllidar_ros2'), 'launch', launch_file]
-            )),
-            launch_arguments={
-                'serial_port': LaunchConfiguration('lidar_serial_port'), 
-                'frame_id': LaunchConfiguration('frame_id'),
-            }.items()   
-        )]
+        return [
+            SetRemap(src='scan',dst='scan/unfiltered'),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(PathJoinSubstitution(
+                    [FindPackageShare('sllidar_ros2'), 'launch', launch_file]
+                )),
+                launch_arguments={
+                    'serial_port': LaunchConfiguration('lidar_serial_port'),
+                    'frame_id': LaunchConfiguration('frame_id'),
+                }.items()
+            )
+        ]
     else:
         return []
 
@@ -72,6 +74,10 @@ def generate_launch_description():
         's3',
         't1',
     ]
+
+    laser_filter_config_path = PathJoinSubstitution(
+        [FindPackageShare('linorobot2_bringup'), 'config', 'laser_filter.yaml']
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -124,7 +130,7 @@ def generate_launch_description():
             name='ydlidar_ros2_driver_node',
             output='screen',
             emulate_tty=True,
-            remappings=[('scan', LaunchConfiguration('topic_name'))],
+            remappings=[('scan', 'scan/unfiltered')],
             parameters=[{ 
                 'port': LaunchConfiguration('lidar_serial_port'),
                 'frame_id': LaunchConfiguration('frame_id'),
@@ -172,7 +178,7 @@ def generate_launch_description():
             package='xv_11_driver',
             executable='xv_11_driver',
             output='screen',
-            remappings=[('scan', LaunchConfiguration('topic_name'))],
+            remappings=[('scan', 'scan/unfiltered')],
             parameters=[{
                 'port': LaunchConfiguration('lidar_serial_port'),
                 'baud_rate': 115200, 
@@ -189,7 +195,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'serial_port': '/dev/ttyUSB0'},
-                {'topic_name': LaunchConfiguration('topic_name')},
+                {'topic_name': 'scan/unfiltered'},
                 {'lidar_frame': LaunchConfiguration('frame_id')},
                 {'range_threshold': 0.005}
             ]
@@ -203,7 +209,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'product_name': 'LDLiDAR_LD06'},
-                {'topic_name': LaunchConfiguration('topic_name')},
+                {'topic_name': 'scan/unfiltered'},
                 {'frame_id': LaunchConfiguration('frame_id')},
                 {'comm_mode': LaunchConfiguration('lidar_transport')},
                 {'port_name': LaunchConfiguration('lidar_serial_port')},
@@ -226,7 +232,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'product_name': 'LDLiDAR_LD19'},
-                {'topic_name': LaunchConfiguration('topic_name')},
+                {'topic_name': 'scan/unfiltered'},
                 {'frame_id': LaunchConfiguration('frame_id')},
                 {'comm_mode': LaunchConfiguration('lidar_transport')},
                 {'port_name': LaunchConfiguration('lidar_serial_port')},
@@ -249,7 +255,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'product_name': 'LDLiDAR_STL27L'},
-                {'topic_name': LaunchConfiguration('topic_name')},
+                {'topic_name': 'scan/unfiltered'},
                 {'frame_id': LaunchConfiguration('frame_id')},
                 {'comm_mode': LaunchConfiguration('lidar_transport')},
                 {'port_name': LaunchConfiguration('lidar_serial_port')},
@@ -263,6 +269,20 @@ def generate_launch_description():
                 {'angle_crop_max': 225.0}
             ]
         ),
-        OpaqueFunction(function=launch_rplidar)
+
+        OpaqueFunction(function=launch_rplidar),
+
+        Node(
+            package="laser_filters",
+            executable="scan_to_scan_filter_chain",
+            parameters=[
+                laser_filter_config_path
+            ],
+            remappings=[
+                ('scan', 'scan/unfiltered'),
+                ('scan_filtered', LaunchConfiguration('topic_name'))
+            ]
+        )
+
     ])
 
