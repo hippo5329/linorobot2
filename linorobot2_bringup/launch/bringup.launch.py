@@ -111,9 +111,10 @@ def generate_launch_description():
             executable='imu_filter_madgwick_node',
             name='madgwick_filter_node',
             output='screen',
-            parameters=[
-                {'orientation_stddev' : LaunchConfiguration('orientation_stddev')}
-            ]
+            parameters=[{
+                'orientation_stddev' : LaunchConfiguration('orientation_stddev'),
+                'publish_tf' : False
+            }]
         ),
 
         Node(
