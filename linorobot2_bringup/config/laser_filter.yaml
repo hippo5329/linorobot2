@@ -1,8 +1,15 @@
 scan_to_scan_filter_chain:
   ros__parameters:
     filter1:
-      name: angle
-      type: laser_filters/LaserScanAngularBoundsFilter
+      name: box_filter
+      type: laser_filters/LaserScanBoxFilter
       params:
-        lower_angle: -1.57
-        upper_angle: 1.57
+        box_frame: base_laser
+        max_x: 25.
+        max_y: 25.
+        max_z: 0.5
+        min_x: -25.
+        min_y: -25.
+        min_z: -0.5
+        
+        invert: true # activate to remove all points outside of the box
