@@ -365,7 +365,7 @@ planner_server:
     use_sim_time: false
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
+      plugin: "nav2_navfn_planner::NavfnPlanner"
       tolerance: 0.5
       use_astar: false
       allow_unknown: true
