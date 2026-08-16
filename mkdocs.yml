@@ -35,6 +35,7 @@ nav:
       - 6. Board Presets: customization/06_board_presets.md
       - 7. Transports & micro-ROS Agent: customization/07_transport_and_agent.md
       - 8. Step-by-Step Bringup: customization/08_step_by_step_bringup.md
+      - 9. AI Robot Configuration Engine: customization/09_ai_robot_config_engine.md
   - Docker: docker.md
   - Simulation Tools: tools.md
 
