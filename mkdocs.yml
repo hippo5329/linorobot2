@@ -26,6 +26,15 @@ nav:
   - Setting Up Transforms: transforms.md
   - Mapping: mapping.md
   - Navigation: navigation.md
+  - Customization Guide:
+      - 1. Microcontroller Selection: customization/01_microcontroller_selection.md
+      - 2. Kinematics & Motors: customization/02_kinematics_and_motors.md
+      - 3. Motor Drivers: customization/03_motor_drivers.md
+      - 4. Pin Assignment & Rules: customization/04_pin_assignment_rules.md
+      - 5. Sensors & Actuators: customization/05_sensors_and_actuators.md
+      - 6. Board Presets: customization/06_board_presets.md
+      - 7. Transports & micro-ROS Agent: customization/07_transport_and_agent.md
+      - 8. Step-by-Step Bringup: customization/08_step_by_step_bringup.md
   - Docker: docker.md
   - Simulation Tools: tools.md
 
