@@ -31,9 +31,12 @@ Linorobot2 Console is a lightweight, zero-dependency browser studio for the robo
 ## 🛠️ Quick Start Walkthrough
 
 ### 1. Launching Console
-Run the server on the robot computer (or inside your development workstation):
+Clone this fork (branch `console`) -- no build, no `rosdep`, no `install.bash`
+or `setup.bash` to run first; the Console is plain Python 3 stdlib and does the
+ROS 2 install for you from the Install tab.
 ```bash
-cd ~/code/linorobot2/tools/linorobot2_console/web
+git clone -b console https://github.com/hippo5329/linorobot2.git
+cd linorobot2/tools/linorobot2_console/web
 python3 server.py 8090
 ```
 Open **`http://localhost:8090/`** (or `http://<robot-ip>:8090/` from any computer on your local network or Tailscale).
