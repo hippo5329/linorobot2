@@ -117,6 +117,30 @@ class TestLinorobot2Console(unittest.TestCase):
             if sensor["udev"] is not None:
                 self.assertIsInstance(sensor["udev"], list)
 
+    def test_upstream_github_issues_diagnostics(self):
+        """Test AI diagnosis and patches for common upstream GitHub issues (#113, #37, #76, #12)."""
+        from server import analyze_robotics_ai
+
+        # Upstream #113: Map continuously rotating during SLAM
+        diag_113 = analyze_robotics_ai("Map continuously rotating with RPLidar A1 and vibrating IMU during SLAM")
+        self.assertIn("Upstream #113/#67", diag_113["diagnosis"])
+        self.assertFalse(diag_113["ekf_patch"]["fuse_imu_yaw"])
+        self.assertEqual(diag_113["ekf_patch"]["frequency"], 50.0)
+        self.assertEqual(diag_113["slam_patch"]["minimum_travel_heading"], 0.25)
+
+        # Upstream #37: Obstacles can't clear in local costmap even after they move out
+        diag_37 = analyze_robotics_ai("Obstacles cant clear in local costmap even after they move out ghost obstacle")
+        self.assertIn("Upstream #37", diag_37["diagnosis"])
+        self.assertEqual(diag_37["nav2_patch"]["raytrace_range"], 3.5)
+        self.assertEqual(diag_37["nav2_patch"]["obstacle_max_range"], 3.0)
+
+        # Upstream #76: Large robot jerks and runs slowly / fierce vibration
+        diag_76 = analyze_robotics_ai("Large robot jerks and runs slowly with fierce vibration 50 kg")
+        self.assertIn("Upstream #76", diag_76["diagnosis"])
+        self.assertEqual(diag_76["nav2_patch"]["max_accel_x"], 1.0)
+        self.assertEqual(diag_76["nav2_patch"]["max_decel_x"], 1.5)
+        self.assertEqual(diag_76["nav2_patch"]["max_vel_theta"], 1.2)
+
     def test_ai_tune_rotation_modes(self):
         """Test AI diagnosis and patching for rotation, drift, overshoot, and unreachable destination."""
         from server import analyze_robotics_ai

@@ -286,6 +286,57 @@ def analyze_robotics_ai(prompt, base="2wd", distro="jazzy", model=None):
         ekf_patch["two_d_mode"] = True
         ekf_patch["frequency"] = 50.0
 
+    # 5. UPSTREAM ISSUE #113 & #67: CONTINUOUS MAP SPINNING DURING SLAM
+    if any(k in p for k in ["map spinning", "map continuously rotating", "map rotating", "slam spinning", "slam circle", "flickering pose", "noisy imu", "spinning map"]):
+        diagnosis.append("[Upstream #113/#67] Continuous map spinning and pose flickering during SLAM detected. Uncalibrated or vibrating IMU (e.g. MPU6050 with spinning LiDAR vibration) causes EKF to integrate runaway orientation yaw.")
+        recommendations.append("Disable IMU orientation yaw in EKF (fuse_imu_yaw = false) and only fuse angular velocity (vyaw).")
+        recommendations.append("Enforce 2D planar mode (two_d_mode = true) and 50Hz update rate in EKF to stop false vertical/roll tilt.")
+        recommendations.append("In SLAM Toolbox, decrease minimum_travel_heading to 0.25 rad for dense scan registration.")
+        ekf_patch["fuse_imu_yaw"] = False
+        ekf_patch["two_d_mode"] = True
+        ekf_patch["frequency"] = 50.0
+        slam_patch["minimum_travel_heading"] = 0.25
+
+    # 6. UPSTREAM ISSUE #37: OBSTACLES CANNOT CLEAR FROM LOCAL COSTMAP
+    if any(k in p for k in ["obstacle clear", "obstacle cant clear", "cant clear", "ghost obstacle", "persistent obstacle", "moved out", "obstacle stuck"]):
+        diagnosis.append("[Upstream #37] Obstacles fail to clear from local costmap after moving out. Caused by raytrace clearing range (raytrace_range) being equal to or smaller than obstacle insertion range (obstacle_max_range).")
+        recommendations.append("Increase raytrace_range to 3.5m, strictly exceeding obstacle_max_range (3.0m) to clear free space along raycasts.")
+        recommendations.append("Slightly reduce costmap inflation_radius to 0.55m to prevent lingering inflation halos.")
+        nav2_patch.update({
+            "raytrace_range": 3.5,
+            "obstacle_max_range": 3.0,
+            "inflation_radius": 0.55
+        })
+
+    # 7. UPSTREAM ISSUE #76: HEAVY / LARGE ROBOT JERK & VIOLENT VIBRATION
+    if any(k in p for k in ["heavy", "large robot", "jerks", "jerk", "vibrat", "50 kg", "fierce vibration", "violent", "shudder"]):
+        diagnosis.append("[Upstream #76] Heavy robot (>50kg) jerking and severe vibration under default velocity smoother acceleration ramps (3.0 m/s²) which excite mechanical backlash and motor driver current limits.")
+        recommendations.append("Smooth linear acceleration to 1.0 m/s² and angular acceleration to 1.2 rad/s².")
+        recommendations.append("Set controlled deceleration to -1.5 m/s² to prevent sudden braking spikes and tipping.")
+        recommendations.append("Reduce cruising velocity to 0.35 m/s for safe, stable transit.")
+        nav2_patch.update({
+            "max_vel_x": 0.35,
+            "max_accel_x": 1.0,
+            "max_decel_x": 1.5,
+            "max_vel_theta": 1.2,
+            "max_accel_theta": 1.2,
+            "max_decel_theta": 1.8
+        })
+
+    # 8. UPSTREAM ISSUE #12 & #15: CONTINUOUS IMMEDIATE RECOVERY LOOPS
+    if any(k in p for k in ["recovery loop", "recoveries server", "always runs recovery", "spin recovery", "recovery backup not working", "aborting handle"]):
+        diagnosis.append("[Upstream #12/#15] Immediate recovery server spin loops occur when navigation goal or initial pose is inside obstacle inflation cost, or controller patience aborts immediately due to strict tolerance window.")
+        recommendations.append("Expand goal tolerance window (xy_goal_tolerance = 0.08m, yaw_goal_tolerance = 0.12 rad).")
+        recommendations.append("Steepen inflation decay (inflation_radius = 0.52m, cost_scaling_factor = 5.5) to clear space around obstacles.")
+        recommendations.append("Increase controller progress allowance to 15.0s.")
+        nav2_patch.update({
+            "xy_goal_tolerance": 0.08,
+            "yaw_goal_tolerance": 0.12,
+            "inflation_radius": 0.52,
+            "cost_scaling_factor": 5.5,
+            "movement_time_allowance": 15.0
+        })
+
     if not diagnosis:
         diagnosis.append("Custom robotic parameter optimization for smooth mobile robot navigation.")
         recommendations.append("Applied balanced velocity limits (0.5 m/s) and 50 Hz EKF state estimation.")
@@ -1109,7 +1160,9 @@ class Handler(BaseHTTPRequestHandler):
                     required_movement_radius=data.get("required_movement_radius"),
                     rotate_to_heading_angular_vel=data.get("rotate_to_heading_angular_vel"),
                     angular_dist_threshold=data.get("angular_dist_threshold"),
-                    symmetric_yaw_tolerance=data.get("symmetric_yaw_tolerance")
+                    symmetric_yaw_tolerance=data.get("symmetric_yaw_tolerance"),
+                    raytrace_range=data.get("raytrace_range"),
+                    obstacle_max_range=data.get("obstacle_max_range")
                 )
             else:
                 patched_cfg = current_cfg
@@ -1288,7 +1341,9 @@ class Handler(BaseHTTPRequestHandler):
                     required_movement_radius=nav2_p.get("required_movement_radius"),
                     rotate_to_heading_angular_vel=nav2_p.get("rotate_to_heading_angular_vel"),
                     angular_dist_threshold=nav2_p.get("angular_dist_threshold"),
-                    symmetric_yaw_tolerance=nav2_p.get("symmetric_yaw_tolerance")
+                    symmetric_yaw_tolerance=nav2_p.get("symmetric_yaw_tolerance"),
+                    raytrace_range=nav2_p.get("raytrace_range"),
+                    obstacle_max_range=nav2_p.get("obstacle_max_range")
                 )
                 save_nav2_config(patched_nav2, distro)
 

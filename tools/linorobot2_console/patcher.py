@@ -203,7 +203,8 @@ def patch_nav2_text(text, base_type='2wd', max_vel_x=0.5, max_vel_y=None, max_ve
                     lookahead_dist=None, approach_velocity_scaling_dist=None,
                     movement_time_allowance=None, required_movement_radius=None,
                     rotate_to_heading_angular_vel=None, angular_dist_threshold=None,
-                    symmetric_yaw_tolerance=None):
+                    symmetric_yaw_tolerance=None,
+                    raytrace_range=None, obstacle_max_range=None):
     """Patch Nav2 YAML text with specified speed, acceleration, and kinematic parameters."""
     is_mecanum = (str(base_type).strip().lower() == 'mecanum')
     max_vel_x = float(max_vel_x)
@@ -273,6 +274,12 @@ def patch_nav2_text(text, base_type='2wd', max_vel_x=0.5, max_vel_y=None, max_ve
         text = re.sub(r'(inflation_radius:\s*)[^\n]+', rf'\g<1>{float(inflation_radius)}', text)
     if cost_scaling_factor is not None:
         text = re.sub(r'(cost_scaling_factor:\s*)[^\n]+', rf'\g<1>{float(cost_scaling_factor)}', text)
+
+    # 10. Costmap raytrace and obstacle clearing (Upstream Issue #37)
+    if raytrace_range is not None:
+        text = re.sub(r'(\braytrace_range:\s*)[^\n]+', rf'\g<1>{float(raytrace_range)}', text)
+    if obstacle_max_range is not None:
+        text = re.sub(r'(\bobstacle_max_range:\s*)[^\n]+', rf'\g<1>{float(obstacle_max_range)}', text)
 
     return text
 
