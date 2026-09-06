@@ -27,6 +27,10 @@ try:
     import patcher
 except Exception:
     patcher = None
+try:
+    import yaml_merge
+except Exception:
+    yaml_merge = None
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tools/linorobot2_console/..
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -697,6 +701,153 @@ def list_serial_ports():
             **props,
         })
     return ports
+
+
+# ============================================================================
+# Params export / merge / promote
+# ============================================================================
+PKG_CONFIG_DIR = os.path.join(LINOROBOT2_ROOT, "linorobot2_navigation", "config")
+_EKF_BASES = ("2wd", "4wd", "mecanum")
+
+
+def _params_paths(kind, distro=None, base=None):
+    """(active_path, template_path, package_path) for a nav2/ekf/slam config."""
+    distro = distro or detect_ros_distro()
+    if kind == "nav2":
+        return (
+            get_nav2_config_path(distro),
+            os.path.join(CONFIG_DIR, f"nav2_{distro}.yaml"),
+            os.path.join(PKG_CONFIG_DIR, f"navigation_{distro}.yaml"),
+        )
+    if kind == "ekf":
+        b = (base or "").lower()
+        suffix = f"_{b}" if b in _EKF_BASES else ""
+        return (
+            get_ekf_config_path(),
+            os.path.join(CONFIG_DIR, f"ekf{suffix}.yaml"),
+            os.path.join(PKG_CONFIG_DIR, f"ekf{suffix}.yaml"),
+        )
+    if kind == "slam":
+        return (
+            get_slam_config_path(),
+            os.path.join(CONFIG_DIR, "slam.yaml"),
+            os.path.join(PKG_CONFIG_DIR, "slam.yaml"),
+        )
+    raise ValueError(f"unknown params kind: {kind}")
+
+
+def _read_params(kind, distro=None, base=None):
+    """Current effective text for a config: active file if present, else template."""
+    if kind == "nav2":
+        return get_nav2_config(distro)
+    if kind == "ekf":
+        return get_ekf_config(base)
+    if kind == "slam":
+        return get_slam_config()
+    raise ValueError(kind)
+
+
+def _resolve_target_path(kind, target, distro=None, base=None):
+    active, template, package = _params_paths(kind, distro, base)
+    return {"active": active, "template": template, "package": package}.get(target)
+
+
+EXPORT_LAUNCH_TEMPLATE = '''#!/usr/bin/env python3
+"""Standalone Nav2 launcher exported by linorobot2_console on {ts}.
+
+Runs the exported params through the fork's own navigation.launch.py without
+needing the console. Adjust the paths / args below or override on the CLI:
+
+    ros2 launch nav2.launch.py map:=/path/to/map.yaml slam:=false
+"""
+import os
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.substitutions import FindPackageShare
+
+BUNDLE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # this file is <bundle>/launch/
+NAV2_PARAMS = os.path.join(BUNDLE, "config", "navigation_{distro}.yaml")
+SLAM_PARAMS = os.path.join(BUNDLE, "config", "slam.yaml")
+DEPTH_COSTMAP_DEFAULT = "{depth_costmap}"   # auto | true | false
+
+
+def _launch(context, *a, **k):
+    nav = os.path.join(
+        FindPackageShare("linorobot2_navigation").find("linorobot2_navigation"),
+        "launch", "navigation.launch.py",
+    )
+    return [IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(nav),
+        launch_arguments={{
+            "slam": LaunchConfiguration("slam"),
+            "distro": "{distro}",
+            "base": "{base}",
+            "params_file": NAV2_PARAMS,
+            "slam_params_file": SLAM_PARAMS,
+            "map": LaunchConfiguration("map"),
+            "sim": LaunchConfiguration("sim"),
+            "rviz": LaunchConfiguration("rviz"),
+        }}.items(),
+    )]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument("slam", default_value="false"),
+        DeclareLaunchArgument("map", default_value=""),
+        DeclareLaunchArgument("sim", default_value="false"),
+        DeclareLaunchArgument("rviz", default_value="false"),
+        OpaqueFunction(function=_launch),
+    ])
+'''
+
+
+def export_params_bundle(dest_dir, distros=None, base="2wd", depth_costmap="auto"):
+    """Write the active nav2/ekf/slam configs + a standalone launcher to dest_dir."""
+    import time
+    dest_dir = os.path.abspath(os.path.expanduser(dest_dir))
+    cfg_out = os.path.join(dest_dir, "config")
+    launch_out = os.path.join(dest_dir, "launch")
+    os.makedirs(cfg_out, exist_ok=True)
+    os.makedirs(launch_out, exist_ok=True)
+    distros = distros or [detect_ros_distro()]
+    written = []
+
+    def _w(path, text):
+        with open(path, "w") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+        written.append({"path": path, "bytes": len(text)})
+
+    for d in distros:
+        if d not in SUPPORTED_DISTROS:
+            continue
+        _w(os.path.join(cfg_out, f"navigation_{d}.yaml"), _read_params("nav2", d))
+    _w(os.path.join(cfg_out, "ekf.yaml"), _read_params("ekf", base=None))
+    for b in _EKF_BASES:
+        _, tpl, _pkg = _params_paths("ekf", base=b)
+        src = get_ekf_config_path()
+        text = None
+        if os.path.exists(src):
+            with open(src) as f:
+                text = f.read()
+        elif os.path.exists(tpl):
+            with open(tpl) as f:
+                text = f.read()
+        if text is not None:
+            _w(os.path.join(cfg_out, f"ekf_{b}.yaml"), text)
+    _w(os.path.join(cfg_out, "slam.yaml"), _read_params("slam"))
+    _w(os.path.join(launch_out, "nav2.launch.py"),
+       EXPORT_LAUNCH_TEMPLATE.format(
+           ts=time.strftime("%Y-%m-%d %H:%M:%S%z"),
+           distro=(distros[0] if distros else detect_ros_distro()),
+           base=base, depth_costmap=depth_costmap))
+    _w(os.path.join(dest_dir, "README.md"),
+       "# Exported linorobot2 Nav2 params\n\n"
+       f"Generated by linorobot2_console, {time.strftime('%Y-%m-%d %H:%M:%S%z')}.\n\n"
+       "```\nros2 launch launch/nav2.launch.py map:=/path/to/map.yaml slam:=false\n```\n")
+    return {"dest_dir": dest_dir, "files": written, "count": len(written)}
 
 
 def load_config():
@@ -1669,6 +1820,91 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/import_config":
             self._handle_import_config(data)
+            return
+
+        if path == "/api/params/export":
+            dest = (data.get("dest_dir") or "").strip()
+            if not dest:
+                self._send_json({"error": "dest_dir required"}, 400)
+                return
+            try:
+                result = export_params_bundle(
+                    dest,
+                    distros=data.get("distros") or SUPPORTED_DISTROS[:3],
+                    base=data.get("base") or "2wd",
+                    depth_costmap=data.get("depth_costmap") or "auto",
+                )
+            except OSError as e:
+                self._send_json({"error": f"export failed: {e}"}, 400)
+                return
+            self._send_json({"status": "exported", **result})
+            return
+
+        if path == "/api/params/merge":
+            if not yaml_merge:
+                self._send_json({"error": "yaml_merge unavailable"}, 500)
+                return
+            kind = data.get("kind", "nav2")
+            distro = data.get("distro") or detect_ros_distro()
+            base = data.get("base") or "2wd"
+            target = data.get("target", "template")
+            target_path = _resolve_target_path(kind, target, distro, base)
+            if not target_path:
+                self._send_json({"error": f"bad target: {target}"}, 400)
+                return
+            # source = explicit text (imported file), else the current active config
+            source_text = data.get("source_text")
+            if source_text is None:
+                source_text = _read_params(kind, distro, base)
+            try:
+                with open(target_path) as f:
+                    target_text = f.read()
+            except OSError:
+                # target file doesn't exist yet -> the merge is just the source
+                target_text = source_text
+            merged, report = yaml_merge.merge_yaml(target_text, source_text)
+            if not data.get("dry_run"):
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with open(target_path, "w") as f:
+                    f.write(merged)
+            self._send_json({
+                "status": "dry-run" if data.get("dry_run") else "merged",
+                "kind": kind, "target": target, "target_path": target_path,
+                "report": report, "config": merged,
+            })
+            return
+
+        if path == "/api/params/promote":
+            kind = data.get("kind", "nav2")
+            distro = data.get("distro") or detect_ros_distro()
+            base = data.get("base") or "2wd"
+            direction = data.get("direction", "active_to_template")
+            active, template, package = _params_paths(kind, distro, base)
+            routes = {
+                "active_to_template": (active, template),
+                "template_to_active": (template, active),
+                "active_to_package": (active, package),
+                "package_to_active": (package, active),
+            }
+            if direction not in routes:
+                self._send_json({"error": f"bad direction: {direction}"}, 400)
+                return
+            src_path, dst_path = routes[direction]
+            if not os.path.exists(src_path):
+                # active may be unwritten -> fall back to effective text
+                if src_path == active:
+                    text = _read_params(kind, distro, base)
+                else:
+                    self._send_json({"error": f"source not found: {src_path}"}, 404)
+                    return
+            else:
+                with open(src_path) as f:
+                    text = f.read()
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            with open(dst_path, "w") as f:
+                f.write(text if text.endswith("\n") else text + "\n")
+            self._send_json({"status": "promoted", "kind": kind, "direction": direction,
+                             "from": src_path, "to": dst_path, "bytes": len(text)})
             return
 
         self._send_json({"error": "Not found"}, 404)

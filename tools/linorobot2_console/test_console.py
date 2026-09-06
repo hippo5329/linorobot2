@@ -193,6 +193,56 @@ class TestLinorobot2Console(unittest.TestCase):
         # idempotent
         self.assertEqual(patcher.patch_costmap_sources(on, depth_enabled=True), sample)
 
+    def test_yaml_merge_preserves_comments_and_paths(self):
+        import yaml_merge
+        tgt = ("a:\n  ros__parameters:\n    max_vel_x: 0.5   # cruise\n"
+               "    max_vel_theta: 2.5\n"
+               "l:\n  l:\n    ros__parameters:\n      voxel_layer:\n"
+               "        scan:\n          topic: /scan\n"
+               "        pointcloud:\n          topic: /camera/depth/color/points\n")
+        src = (tgt.replace("0.5   # cruise", "0.8")
+                  .replace("topic: /scan\n", "topic: /scan_filtered\n")
+                  .replace("    max_vel_theta: 2.5\n", "    max_vel_theta: 2.5\n    extra_key: 1\n"))
+        merged, rep = yaml_merge.merge_yaml(tgt, src)
+        self.assertIn("max_vel_x: 0.8   # cruise", merged)      # comment kept, value changed
+        self.assertIn("topic: /scan_filtered", merged)
+        self.assertIn("topic: /camera/depth/color/points", merged)  # sibling path untouched
+        self.assertIn("a/ros__parameters/max_vel_x", rep["changed"])
+        self.assertIn("l/l/ros__parameters/voxel_layer/scan/topic", rep["changed"])
+        self.assertEqual(rep["source_only"], ["a/ros__parameters/extra_key"])  # reported, not written
+        self.assertNotIn("extra_key", merged)
+        self.assertEqual(yaml_merge.merge_yaml(merged, src)[0], merged)  # idempotent
+
+    def test_params_export_bundle(self):
+        import tempfile, importlib
+        srv = importlib.import_module("server")
+        with tempfile.TemporaryDirectory() as d:
+            res = srv.export_params_bundle(d, distros=["jazzy", "lyrical", "rolling"], base="2wd")
+            names = sorted(os.path.basename(f["path"]) for f in res["files"])
+            self.assertIn("navigation_jazzy.yaml", names)
+            self.assertIn("navigation_rolling.yaml", names)
+            self.assertIn("ekf_mecanum.yaml", names)
+            self.assertIn("slam.yaml", names)
+            self.assertIn("nav2.launch.py", names)
+            self.assertIn("README.md", names)
+            launch = os.path.join(d, "launch", "nav2.launch.py")
+            with open(launch) as fh:
+                src = fh.read()
+            self.assertIn('BUNDLE = os.path.dirname(os.path.dirname', src)   # config is a sibling of launch/
+            self.assertIn('"distro": "jazzy"', src)
+            compile(src, launch, "exec")   # exported launcher is valid python
+
+    def test_params_path_resolution(self):
+        import importlib
+        srv = importlib.import_module("server")
+        active, tpl, pkg = srv._params_paths("nav2", "jazzy")
+        self.assertTrue(active.endswith("console_nav2_jazzy.yaml"))
+        self.assertTrue(tpl.endswith("config/nav2_jazzy.yaml"))
+        self.assertTrue(pkg.endswith("linorobot2_navigation/config/navigation_jazzy.yaml"))
+        a2, t2, p2 = srv._params_paths("ekf", base="mecanum")
+        self.assertTrue(t2.endswith("ekf_mecanum.yaml"))
+        self.assertTrue(srv._params_paths("slam")[1].endswith("config/slam.yaml"))
+
     def test_depth_costmap_gate_is_console_only(self):
         """The depth->costmap gate lives in the console's launch_nav2.py; upstream navigation.launch.py is untouched."""
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

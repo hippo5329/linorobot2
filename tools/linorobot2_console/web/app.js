@@ -1619,6 +1619,76 @@ if (btnSlamReset && slamTextarea) {
   });
 }
 
+// ---------- params export / merge / promote ----------
+const paramsOpResult = document.getElementById("params-op-result");
+function showParamsResult(obj) {
+  if (paramsOpResult) paramsOpResult.textContent =
+    typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+}
+async function paramsPost(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+function editorDistro() {
+  return (nav2EditorDistro && nav2EditorDistro.value) || getDistro();
+}
+
+document.getElementById("btn-params-export")?.addEventListener("click", async () => {
+  const dir = document.getElementById("params-export-dir").value.trim();
+  if (!dir) { showParamsResult("Enter an export directory first."); return; }
+  showParamsResult("Exporting…");
+  try {
+    const d = await paramsPost("/api/params/export", {
+      dest_dir: dir,
+      distros: ["jazzy", "lyrical", "rolling"],
+      depth_costmap: document.getElementById("bringup-depth-sensor")?.value ? "true" : "false",
+    });
+    showParamsResult(d);
+  } catch (e) { showParamsResult("Export failed: " + e.message); }
+});
+
+async function runMerge(dryRun, importText) {
+  const body = {
+    kind: document.getElementById("params-merge-kind").value,
+    distro: editorDistro(),
+    dry_run: dryRun,
+  };
+  if (importText != null) { body.target = "active"; body.source_text = importText; }
+  else { body.target = document.getElementById("params-merge-target").value; }
+  showParamsResult(dryRun ? "Previewing merge…" : "Merging…");
+  try {
+    const d = await paramsPost("/api/params/merge", body);
+    showParamsResult({ status: d.status, target: d.target_path, report: d.report });
+    if (d.status === "merged" && !importText && nav2Textarea) loadNav2Config(editorDistro());
+  } catch (e) { showParamsResult("Merge failed: " + e.message); }
+}
+document.getElementById("btn-params-merge-dry")?.addEventListener("click", () => runMerge(true));
+document.getElementById("btn-params-merge")?.addEventListener("click", () => runMerge(false));
+document.getElementById("btn-params-merge-import")?.addEventListener("click", () => {
+  const t = document.getElementById("params-import-text").value;
+  if (!t.trim()) { showParamsResult("Paste a params file first."); return; }
+  runMerge(false, t);
+});
+
+document.getElementById("btn-params-promote")?.addEventListener("click", async () => {
+  showParamsResult("Promoting…");
+  try {
+    const d = await paramsPost("/api/params/promote", {
+      kind: document.getElementById("params-merge-kind").value,
+      distro: editorDistro(),
+      direction: document.getElementById("params-promote-dir").value,
+    });
+    showParamsResult(d);
+    if (d.status === "promoted" && d.direction.endsWith("_to_active") && nav2Textarea) {
+      loadNav2Config(editorDistro());
+    }
+  } catch (e) { showParamsResult("Promote failed: " + e.message); }
+});
+
 loadEkfConfig();
 loadSlamConfig();
 

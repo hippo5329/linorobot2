@@ -438,10 +438,54 @@
             <button id="btn-slam-reset-defaults" class="btn btn-sm">Reset SLAM to Defaults</button>
           </div>
           <textarea id="slam-config-text" rows="8" style="width: 100%; font-family: var(--font-mono); font-size: 11px; background: #0c121e; color: #cbd5e1; border: 1px solid var(--border-soft); border-radius: 6px; padding: 8px; margin-bottom: 6px;"></textarea>
-          <div class="row">
+          <div class="row" style="margin-bottom: 14px;">
             <button id="btn-slam-save-config" class="btn btn-primary btn-sm">Save SLAM YAML</button>
             <span id="slam-save-status" class="hint" style="align-self: center;"></span>
           </div>
+
+          <!-- Export / Merge / Promote -->
+          <h4 style="margin: 6px 0; color: var(--accent);">Export &amp; Merge</h4>
+          <p class="hint" style="margin: 0 0 6px;">Take the tuned Nav2/EKF/SLAM params out of the console:
+            <b>export</b> a standalone bundle (configs + a launch file), <b>merge</b> the active config's
+            values into the repo template (comment-preserving, per-key), or <b>promote</b> a whole file
+            either direction.</p>
+          <div class="row" style="margin-bottom: 6px;">
+            <input type="text" id="params-export-dir" placeholder="export dir, e.g. ~/my_nav2_params" style="flex: 1;">
+            <button id="btn-params-export" class="btn btn-sm">Export bundle</button>
+          </div>
+          <div class="row" style="margin-bottom: 6px;">
+            <label style="flex: 1;">Merge active
+              <select id="params-merge-kind">
+                <option value="nav2">Nav2</option>
+                <option value="ekf">EKF</option>
+                <option value="slam">SLAM</option>
+              </select>
+              → <select id="params-merge-target">
+                <option value="template">console template</option>
+                <option value="package">package (linorobot2_navigation)</option>
+              </select>
+            </label>
+            <button id="btn-params-merge-dry" class="btn btn-sm">Preview</button>
+            <button id="btn-params-merge" class="btn btn-primary btn-sm">Merge</button>
+          </div>
+          <div class="row" style="margin-bottom: 6px;">
+            <label style="flex: 1;">Promote whole file
+              <select id="params-promote-dir">
+                <option value="active_to_template">active → console template</option>
+                <option value="template_to_active">console template → active</option>
+                <option value="active_to_package">active → package</option>
+                <option value="package_to_active">package → active</option>
+              </select>
+            </label>
+            <button id="btn-params-promote" class="btn btn-sm">Promote</button>
+          </div>
+          <details style="margin-bottom: 4px;">
+            <summary class="hint" style="cursor: pointer;">Merge an external params file into the active config</summary>
+            <textarea id="params-import-text" rows="4" placeholder="paste an external navigation_*.yaml / ekf.yaml / slam.yaml here"
+              style="width: 100%; font-family: var(--font-mono); font-size: 11px; background: #0c121e; color: #cbd5e1; border: 1px solid var(--border-soft); border-radius: 6px; padding: 8px; margin: 6px 0;"></textarea>
+            <button id="btn-params-merge-import" class="btn btn-sm">Merge into active</button>
+          </details>
+          <pre id="params-op-result" class="hint" style="white-space: pre-wrap; margin: 4px 0 0; max-height: 160px; overflow: auto;"></pre>
         </div>
       </details>
     </div>
