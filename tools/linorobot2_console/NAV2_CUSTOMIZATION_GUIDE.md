@@ -161,6 +161,17 @@ ros2 launch linorobot2_navigation navigation.launch.py \
 
 ---
 
+### 5.5 Diagnostic Troubleshooting Matrix: Drift, Overshoot, Destination Reachability & In-Place Rotation
+
+| Symptom / Failure Mode | Physical & Algorithmic Root Cause | Prescribed Parameter & System Fix |
+| :--- | :--- | :--- |
+| **State Estimation Drift** *(Sideways wandering, in-place spin displacement)* | For 2WD/4WD robots, wheel slip during spins publishes noisy $v_y$ in `/odom/unfiltered`. If fused, EKF integrates this as permanent lateral displacement. Low update rate (<20 Hz) causes numerical integration errors. | 1. Set EKF `odom0_config` $v_y = \text{false}$ for differential drive.<br>2. Standardize EKF `frequency: 50.0` (matching micro-ROS).<br>3. Enforce `two_d_mode: true`.<br>4. In `controller_server`, set `min_y_velocity_threshold: 0.5`. |
+| **Goal Overshoot** *(Blowing past destination, late braking, corner overshoot)* | Loose deceleration limits in `velocity_smoother` (e.g. $-1.0\,\text{m/s}^2$) leave robot with excessive kinetic energy. Approach velocity scaling disabled or lookahead distance too long near goal. | 1. Stiffen braking authority in `velocity_smoother`: `max_decel: [-2.8, 0.0, -3.5]`.<br>2. Enable approach scaling: `approach_velocity_scaling_dist: 0.75m`, `min_approach_linear_velocity: 0.05m/s`.<br>3. Shorten lookahead near goal: `lookahead_dist: 0.45m`. |
+| **Unable to Reach Destination** *(Stops short, tolerance timeout, goal abort)* | Overly strict goal tolerances (<5cm) when mechanical encoder backlash or deadband is 3-4cm; progress checker triggers timeout; or goal pose is placed inside obstacle inflation halo ($cost > 200$). | 1. Expand goal tolerances: `xy_goal_tolerance: 0.08m` (8cm), `yaw_goal_tolerance: 0.12rad` (~7°).<br>2. Increase progress allowance: `movement_time_allowance: 15.0s`, `required_movement_radius: 0.15m`.<br>3. Steepen inflation falloff: `inflation_radius: 0.52m`, `cost_scaling_factor: 5.5`. |
+| **In-Place Rotation Instability** *(Oscillation at goal, wide banana-arc turns, motor shudder)* | Abrupt angular acceleration (>3.0 rad/s²) breaks wheel traction. Missing rotation shim causes controller to trace wide curves instead of turning on the spot. Strict yaw tolerance causes continuous "hunting" oscillation. | 1. Smooth angular acceleration: `max_angular_accel: 2.0 rad/s²`.<br>2. Tune `RotationShimController`: `angular_dist_threshold: 0.785 rad` (45°), `rotate_to_heading_angular_vel: 1.5 rad/s`.<br>3. Enable `rotate_to_heading_once: true`.<br>4. Expand `yaw_goal_tolerance: 0.12 rad`. |
+
+---
+
 ## 6. Automated Patcher Tool (`patcher.py`)
 
 Linorobot2 includes a zero-dependency CLI patcher in `tools/linorobot2_console/patcher.py`:

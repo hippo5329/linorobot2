@@ -164,7 +164,7 @@ def analyze_robotics_ai(prompt, base="2wd", distro="jazzy", model=None):
     slam_patch = {}
 
     target_base = base
-    if any(k in p for k in ["mecanum", "omni", "strafe", "lateral", "sideways"]):
+    if any(k in p for k in ["mecanum", "omni", "holonomic"]) or (any(k in p for k in ["strafe", "lateral"]) and not any(k in p for k in ["drift", "slip", "wander"])):
         target_base = "mecanum"
         diagnosis.append("Robot requires holonomic (omnidirectional) kinematics: lateral strafe is enabled in velocity_smoother, AMCL OmniMotionModel is set, and EKF odom0 vy is fused.")
         recommendations.append("Enable lateral velocity (v_y = 0.5 m/s) and lateral acceleration in velocity_smoother.")
@@ -206,14 +206,47 @@ def analyze_robotics_ai(prompt, base="2wd", distro="jazzy", model=None):
             "max_accel_theta": 2.2
         })
 
-    if any(k in p for k in ["drift", "ekf", "slip", "spinning drift", "lateral drift"]):
-        diagnosis.append("Lateral drift during in-place rotation occurs when non-holonomic wheel slip is erroneously fused into EKF lateral velocity.")
-        recommendations.append("Ensure EKF odom0_config lateral velocity (v_y) is disabled for differential drive robots.")
-        recommendations.append("Enforce 2D planar mode and synchronize EKF loop frequency to 50 Hz.")
+    # 1. DRIFT / STATE ESTIMATION ISSUE
+    if any(k in p for k in ["drift", "ekf", "slip", "spinning drift", "lateral drift", "heading drift", "yaw drift", "wandering", "in-place drift"]):
+        diagnosis.append("State estimation drift detected (lateral wandering or orientation error). In differential/skid robots, fusing lateral velocity (v_y) causes artificial sideways displacement from wheel slip during in-place spins. Low EKF frequency causes numerical integration error.")
+        recommendations.append("Disable lateral velocity (v_y) in EKF odom0_config for differential/skid robots to eliminate spin slip.")
+        recommendations.append("Enforce 2D planar mode (two_d_mode = true) and standardize EKF frequency to 50 Hz to match micro-ROS loop rate.")
+        recommendations.append("Set controller_server min_y_velocity_threshold to 0.5 to filter encoder quantization noise.")
         if target_base != "mecanum":
             ekf_patch["fuse_vy"] = False
         ekf_patch["two_d_mode"] = True
         ekf_patch["frequency"] = 50.0
+
+    # 2. OVERSHOOT / BRAKING ISSUE
+    if any(k in p for k in ["overshoot", "blow past", "late braking", "fly by", "past goal", "stopping distance", "cant brake", "braking authority", "runaway"]):
+        diagnosis.append("Goal overshoot and late braking detected. The robot carries excess kinetic momentum into the destination zone due to loose deceleration limits (-1.0 m/s²) or lack of approach velocity scaling in the local controller.")
+        recommendations.append("Increase braking authority in velocity_smoother: max_decel = [-2.8 m/s², 0.0, -3.5 rad/s²].")
+        recommendations.append("Enable Regulated Pure Pursuit approach velocity scaling starting at 0.75m from goal.")
+        recommendations.append("Shorten lookahead distance near goal to 0.45m to prevent trajectory over-prediction.")
+        recommendations.append("Set realistic goal tolerance (xy_goal_tolerance = 0.08m, yaw_goal_tolerance = 0.12 rad).")
+        nav2_patch.update({
+            "max_decel_x": 2.8,
+            "max_decel_theta": 3.5,
+            "approach_velocity_scaling_dist": 0.75,
+            "lookahead_dist": 0.45,
+            "xy_goal_tolerance": 0.08,
+            "yaw_goal_tolerance": 0.12
+        })
+
+    # 3. UNABLE TO REACH DESTINATION / STUCK BEFORE GOAL
+    if any(k in p for k in ["unable to reach", "cant reach", "dest", "destination", "stuck before goal", "goal timeout", "tolerance timeout", "aborted goal", "hunting at goal", "unreachable"]):
+        diagnosis.append("Robot unable to complete navigation to destination (times out near goal, oscillates endlessly, or aborts path). Typically caused by overly strict goal tolerances (<5cm) triggering controller patience timeouts, or narrow corridor inflation overlap treating the destination as lethal.")
+        recommendations.append("Expand goal tolerance window to 0.08m (8cm) and 0.12 rad (~7°) to accommodate real-world encoder backlash.")
+        recommendations.append("Increase controller progress allowance: movement_time_allowance = 15.0s, required_movement_radius = 0.15m.")
+        recommendations.append("Reduce costmap inflation_radius to 0.52m and steepen cost_scaling_factor to 5.5 so destination poses near walls are not marked lethal.")
+        nav2_patch.update({
+            "xy_goal_tolerance": 0.08,
+            "yaw_goal_tolerance": 0.12,
+            "movement_time_allowance": 15.0,
+            "required_movement_radius": 0.15,
+            "inflation_radius": 0.52,
+            "cost_scaling_factor": 5.5
+        })
 
     if any(k in p for k in ["fast", "speed", "quick", "warehouse", "large", "open", "accelerat"]):
         diagnosis.append("Optimizing parameter envelope for high-speed transit in open warehouse/arena environments.")
@@ -233,6 +266,25 @@ def analyze_robotics_ai(prompt, base="2wd", distro="jazzy", model=None):
             "minimum_travel_heading": 0.3,
             "minimum_travel_distance": 0.3
         })
+
+    # 4. ROTATION / IN-PLACE SPIN / ROTATIONAL OSCILLATION ISSUE
+    if any(k in p for k in ["rotation", "spin in place", "pivot", "turn in place", "rotational oscillation", "hunting", "angular wobble", "rotation shim", "yaw hunting", "head shake", "spinning"]):
+        diagnosis.append("Rotational instability or slip detected during in-place turns and final goal alignment. Often caused by abrupt angular acceleration (>3.0 rad/s²) overpowering floor traction, missing rotation shim alignment causing wide arc swinging, or tight yaw goal tolerance causing end-pose hunting.")
+        recommendations.append("Smooth angular acceleration limit to 2.0 rad/s² to eliminate wheel slip and motor shudder during in-place spins.")
+        recommendations.append("Tune Rotation Shim Controller: angular_dist_threshold = 0.785 rad (45°), rotate_to_heading_angular_vel = 1.5 rad/s.")
+        recommendations.append("Expand yaw goal tolerance window to 0.12 rad (~7°) to prevent continuous hunting around target orientation.")
+        recommendations.append("Ensure EKF odom0_config lateral velocity (v_y = false) is locked to prevent false lateral accumulation during spins.")
+        nav2_patch.update({
+            "max_vel_theta": 1.8,
+            "max_accel_theta": 2.0,
+            "rotate_to_heading_angular_vel": 1.5,
+            "angular_dist_threshold": 0.785,
+            "yaw_goal_tolerance": 0.12
+        })
+        if target_base != "mecanum":
+            ekf_patch["fuse_vy"] = False
+        ekf_patch["two_d_mode"] = True
+        ekf_patch["frequency"] = 50.0
 
     if not diagnosis:
         diagnosis.append("Custom robotic parameter optimization for smooth mobile robot navigation.")
@@ -1046,7 +1098,18 @@ class Handler(BaseHTTPRequestHandler):
                     max_accel_theta=data.get("max_accel_theta", 3.2),
                     desired_linear_vel=data.get("desired_linear_vel"),
                     inflation_radius=data.get("inflation_radius"),
-                    cost_scaling_factor=data.get("cost_scaling_factor")
+                    cost_scaling_factor=data.get("cost_scaling_factor"),
+                    max_decel_x=data.get("max_decel_x"),
+                    max_decel_theta=data.get("max_decel_theta"),
+                    xy_goal_tolerance=data.get("xy_goal_tolerance"),
+                    yaw_goal_tolerance=data.get("yaw_goal_tolerance"),
+                    lookahead_dist=data.get("lookahead_dist"),
+                    approach_velocity_scaling_dist=data.get("approach_velocity_scaling_dist"),
+                    movement_time_allowance=data.get("movement_time_allowance"),
+                    required_movement_radius=data.get("required_movement_radius"),
+                    rotate_to_heading_angular_vel=data.get("rotate_to_heading_angular_vel"),
+                    angular_dist_threshold=data.get("angular_dist_threshold"),
+                    symmetric_yaw_tolerance=data.get("symmetric_yaw_tolerance")
                 )
             else:
                 patched_cfg = current_cfg
@@ -1214,7 +1277,18 @@ class Handler(BaseHTTPRequestHandler):
                     max_accel_theta=nav2_p.get("max_accel_theta", 3.2),
                     desired_linear_vel=nav2_p.get("desired_linear_vel"),
                     inflation_radius=nav2_p.get("inflation_radius"),
-                    cost_scaling_factor=nav2_p.get("cost_scaling_factor")
+                    cost_scaling_factor=nav2_p.get("cost_scaling_factor"),
+                    max_decel_x=nav2_p.get("max_decel_x"),
+                    max_decel_theta=nav2_p.get("max_decel_theta"),
+                    xy_goal_tolerance=nav2_p.get("xy_goal_tolerance"),
+                    yaw_goal_tolerance=nav2_p.get("yaw_goal_tolerance"),
+                    lookahead_dist=nav2_p.get("lookahead_dist"),
+                    approach_velocity_scaling_dist=nav2_p.get("approach_velocity_scaling_dist"),
+                    movement_time_allowance=nav2_p.get("movement_time_allowance"),
+                    required_movement_radius=nav2_p.get("required_movement_radius"),
+                    rotate_to_heading_angular_vel=nav2_p.get("rotate_to_heading_angular_vel"),
+                    angular_dist_threshold=nav2_p.get("angular_dist_threshold"),
+                    symmetric_yaw_tolerance=nav2_p.get("symmetric_yaw_tolerance")
                 )
                 save_nav2_config(patched_nav2, distro)
 

@@ -313,7 +313,10 @@
           <button class="btn btn-sm btn-chip" data-prompt="Mecanum robot needs full lateral strafe and omnidirectional navigation">🤖 Mecanum Strafe</button>
           <button class="btn btn-sm btn-chip" data-prompt="Robot hesitates and gets stuck in 80cm narrow doorways">🚪 80cm Doorway Hesitation</button>
           <button class="btn btn-sm btn-chip" data-prompt="Eliminate rotational hunting and oscillation when reaching goal pose">🔄 Stop Goal Oscillation</button>
-          <button class="btn btn-sm btn-chip" data-prompt="Fix EKF odometry lateral drift during in-place rotation">🩺 Fix EKF Rotation Drift</button>
+          <button class="btn btn-sm btn-chip" data-prompt="Robot drifts sideways and wanders during in-place spins due to odometry slip">🧭 Fix In-Place Drift</button>
+          <button class="btn btn-sm btn-chip" data-prompt="Smooth in-place rotation, eliminate spin slip, and tune rotation shim controller">🔄 Smooth In-Place Rotation</button>
+          <button class="btn btn-sm btn-chip" data-prompt="Robot overshoots destination and blows past goal due to late braking">🛑 Stop Goal Overshoot</button>
+          <button class="btn btn-sm btn-chip" data-prompt="Robot unable to reach nav dest and times out near goal">🎯 Unable to Reach Destination</button>
           <button class="btn btn-sm btn-chip" data-prompt="High speed open warehouse navigation with smooth cornering">🚀 High Speed Warehouse</button>
           <button class="btn btn-sm btn-chip" data-prompt="Sub-centimeter high precision SLAM mapping without rotational blur">🗺️ High-Res SLAM</button>
         </div>
@@ -334,6 +337,10 @@
             <option value="standard_diff">Standard Differential (2WD / 4WD Default)</option>
             <option value="mecanum_omni">Mecanum (Omnidirectional Strafe Enabled)</option>
             <option value="cautious_indoor">Cautious / Narrow Passages (80cm Doorways)</option>
+            <option value="anti_drift">Anti-Drift State Estimation (50Hz EKF, No Lateral Slip)</option>
+            <option value="smooth_rotation">Smooth In-Place Rotation (Rotation Shim & Anti-Oscillation)</option>
+            <option value="anti_overshoot">Anti-Overshoot / Active Braking (-2.8 m/s² Decel)</option>
+            <option value="destination_guarantee">Robust Goal Arrival (Anti-Stuck, 8cm Tolerance)</option>
             <option value="fast_open_space">Fast / Large Open Space (0.8 m/s, 3.0 m/s²)</option>
             <option value="high_res_slam">High-Definition SLAM Mapping (0.025m Resolution)</option>
           </select>

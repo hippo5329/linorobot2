@@ -117,6 +117,46 @@ class TestLinorobot2Console(unittest.TestCase):
             if sensor["udev"] is not None:
                 self.assertIsInstance(sensor["udev"], list)
 
+    def test_ai_tune_rotation_modes(self):
+        """Test AI diagnosis and patching for rotation, drift, overshoot, and unreachable destination."""
+        from server import analyze_robotics_ai
+        import patcher
+
+        # 1. Rotation and spin stability
+        diag_rot = analyze_robotics_ai("robot experiences rotational oscillation and spin slip during in-place turns", base="2wd")
+        self.assertIn("Rotational instability or slip detected", diag_rot["diagnosis"])
+        self.assertEqual(diag_rot["nav2_patch"]["rotate_to_heading_angular_vel"], 1.5)
+        self.assertEqual(diag_rot["nav2_patch"]["angular_dist_threshold"], 0.785)
+        self.assertEqual(diag_rot["nav2_patch"]["max_accel_theta"], 2.0)
+        self.assertEqual(diag_rot["nav2_patch"]["yaw_goal_tolerance"], 0.12)
+        self.assertFalse(diag_rot["ekf_patch"]["fuse_vy"])
+
+        # 2. Drift
+        diag_drift = analyze_robotics_ai("robot drifts sideways during in-place rotation", base="2wd")
+        self.assertIn("State estimation drift detected", diag_drift["diagnosis"])
+        self.assertFalse(diag_drift["ekf_patch"]["fuse_vy"])
+        self.assertEqual(diag_drift["ekf_patch"]["frequency"], 50.0)
+
+        # 3. Overshoot
+        diag_over = analyze_robotics_ai("robot overshoots destination and blows past goal due to late braking", base="2wd")
+        self.assertIn("Goal overshoot and late braking detected", diag_over["diagnosis"])
+        self.assertEqual(diag_over["nav2_patch"]["max_decel_x"], 2.8)
+        self.assertEqual(diag_over["nav2_patch"]["approach_velocity_scaling_dist"], 0.75)
+
+        # 4. Unable to reach destination
+        diag_reach = analyze_robotics_ai("robot unable to reach nav dest and times out near goal", base="2wd")
+        self.assertIn("Robot unable to complete navigation to destination", diag_reach["diagnosis"])
+        self.assertEqual(diag_reach["nav2_patch"]["xy_goal_tolerance"], 0.08)
+        self.assertEqual(diag_reach["nav2_patch"]["movement_time_allowance"], 15.0)
+        self.assertEqual(diag_reach["nav2_patch"]["inflation_radius"], 0.52)
+
+    def test_patcher_all_presets(self):
+        """Test that all presets including anti_drift, anti_overshoot, destination_guarantee, and smooth_rotation patch cleanly."""
+        import patcher
+        for p_name in ["standard_diff", "mecanum_omni", "cautious_indoor", "fast_open_space",
+                       "anti_drift", "anti_overshoot", "destination_guarantee", "smooth_rotation"]:
+            self.assertIn(p_name, patcher.PRESETS)
+
     def test_live_server_status_api(self):
         # Queries active console server on localhost:8090
         try:

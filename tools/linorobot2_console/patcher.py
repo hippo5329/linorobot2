@@ -16,6 +16,92 @@ import sys
 
 
 PRESETS = {
+    "smooth_rotation": {
+        "label": "Smooth In-Place Rotation & Anti-Oscillation",
+        "desc": "Tuned RotationShimController (45° threshold, 1.5 rad/s spin) with smooth angular acceleration (2.0 rad/s²) and zero lateral slip",
+        "base": "2wd",
+        "max_vel_x": 0.5,
+        "max_vel_y": 0.0,
+        "max_vel_theta": 1.8,
+        "max_accel_x": 2.2,
+        "max_accel_y": 0.0,
+        "max_accel_theta": 2.0,
+        "rotate_to_heading_angular_vel": 1.5,
+        "angular_dist_threshold": 0.785,
+        "xy_goal_tolerance": 0.08,
+        "yaw_goal_tolerance": 0.12,
+        "inflation_radius": 0.65,
+        "cost_scaling_factor": 3.5,
+        "ekf_frequency": 50.0,
+        "fuse_vy": False,
+        "fuse_imu_yaw": False,
+        "slam_resolution": 0.05,
+        "slam_max_range": 10.0,
+    },
+    "anti_drift": {
+        "label": "Anti-Drift State Estimation",
+        "desc": "Disables lateral velocity slip fusion in EKF (vy=false) and locks 50Hz 2D planar fusion for 2WD/4WD",
+        "base": "2wd",
+        "max_vel_x": 0.5,
+        "max_vel_y": 0.0,
+        "max_vel_theta": 2.5,
+        "max_accel_x": 2.5,
+        "max_accel_y": 0.0,
+        "max_accel_theta": 3.2,
+        "inflation_radius": 0.7,
+        "cost_scaling_factor": 3.0,
+        "ekf_frequency": 50.0,
+        "fuse_vy": False,
+        "fuse_imu_yaw": False,
+        "slam_resolution": 0.05,
+        "slam_max_range": 10.0,
+    },
+    "anti_overshoot": {
+        "label": "Anti-Overshoot / Active Braking",
+        "desc": "Stiff deceleration (-2.8 m/s²), approach velocity scaling (0.75m), and regulated lookahead to stop goal blow-by",
+        "base": "2wd",
+        "max_vel_x": 0.45,
+        "max_vel_y": 0.0,
+        "max_vel_theta": 2.2,
+        "max_accel_x": 2.0,
+        "max_accel_y": 0.0,
+        "max_accel_theta": 2.5,
+        "max_decel_x": 2.8,
+        "max_decel_theta": 3.5,
+        "xy_goal_tolerance": 0.08,
+        "yaw_goal_tolerance": 0.12,
+        "approach_velocity_scaling_dist": 0.75,
+        "lookahead_dist": 0.45,
+        "inflation_radius": 0.65,
+        "cost_scaling_factor": 3.5,
+        "ekf_frequency": 50.0,
+        "fuse_vy": False,
+        "fuse_imu_yaw": False,
+        "slam_resolution": 0.05,
+        "slam_max_range": 10.0,
+    },
+    "destination_guarantee": {
+        "label": "Robust Goal Arrival (Anti-Stuck)",
+        "desc": "Realistic goal tolerances (0.08m, 0.12rad), generous progress allowance (15s), and steep inflation falloff to reach destination",
+        "base": "2wd",
+        "max_vel_x": 0.4,
+        "max_vel_y": 0.0,
+        "max_vel_theta": 2.0,
+        "max_accel_x": 2.0,
+        "max_accel_y": 0.0,
+        "max_accel_theta": 2.5,
+        "xy_goal_tolerance": 0.08,
+        "yaw_goal_tolerance": 0.12,
+        "movement_time_allowance": 15.0,
+        "required_movement_radius": 0.15,
+        "inflation_radius": 0.52,
+        "cost_scaling_factor": 5.5,
+        "ekf_frequency": 50.0,
+        "fuse_vy": False,
+        "fuse_imu_yaw": False,
+        "slam_resolution": 0.05,
+        "slam_max_range": 10.0,
+    },
     "standard_diff": {
         "label": "Standard Differential (2WD / 4WD)",
         "desc": "Balanced default for indoor differential / skid-steer navigation",
@@ -111,7 +197,13 @@ PRESETS = {
 
 def patch_nav2_text(text, base_type='2wd', max_vel_x=0.5, max_vel_y=None, max_vel_theta=2.5,
                     max_accel_x=2.5, max_accel_y=None, max_accel_theta=3.2, desired_linear_vel=None,
-                    inflation_radius=None, cost_scaling_factor=None):
+                    inflation_radius=None, cost_scaling_factor=None,
+                    max_decel_x=None, max_decel_theta=None,
+                    xy_goal_tolerance=None, yaw_goal_tolerance=None,
+                    lookahead_dist=None, approach_velocity_scaling_dist=None,
+                    movement_time_allowance=None, required_movement_radius=None,
+                    rotate_to_heading_angular_vel=None, angular_dist_threshold=None,
+                    symmetric_yaw_tolerance=None):
     """Patch Nav2 YAML text with specified speed, acceleration, and kinematic parameters."""
     is_mecanum = (str(base_type).strip().lower() == 'mecanum')
     max_vel_x = float(max_vel_x)
@@ -146,7 +238,9 @@ def patch_nav2_text(text, base_type='2wd', max_vel_x=0.5, max_vel_y=None, max_ve
     max_vel_str = f'[{max_vel_x}, {max_vel_y}, {max_vel_theta}]'
     min_vel_str = f'[-{max_vel_x}, -{max_vel_y}, -{max_vel_theta}]'
     max_acc_str = f'[{max_accel_x}, {max_accel_y}, {max_accel_theta}]'
-    max_dec_str = f'[-{max_accel_x}, -{max_accel_y}, -{max_accel_theta}]'
+    dec_x = abs(float(max_decel_x)) if max_decel_x is not None else max_accel_x
+    dec_th = abs(float(max_decel_theta)) if max_decel_theta is not None else max_accel_theta
+    max_dec_str = f'[-{dec_x}, -{max_accel_y}, -{dec_th}]'
 
     text = re.sub(r'(max_velocity:\s*)\[[^\]]+\]', rf'\g<1>{max_vel_str}', text)
     text = re.sub(r'(min_velocity:\s*)\[[^\]]+\]', rf'\g<1>{min_vel_str}', text)
