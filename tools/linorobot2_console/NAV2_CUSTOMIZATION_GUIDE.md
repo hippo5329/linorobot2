@@ -125,7 +125,7 @@ standard: the LiDAR feeds a `LaserScan` source, the depth camera feeds a
 `PointCloud2` source (`/camera/depth/color/points`), and both mark/clear the
 same costmap.
 
-All shipped configs now define both. Every costmap layer carries:
+The **console's** config templates (`tools/linorobot2_console/config/nav2_*.yaml`, and the active `console_nav2_*.yaml`) define both; the upstream `linorobot2_navigation` package configs are left as shipped. Every costmap layer in the console templates carries:
 
 ```yaml
 observation_sources: scan pointcloud
@@ -150,8 +150,7 @@ argument —
 
 When off, it reads the resolved params file, strips `pointcloud` from every
 `observation_sources` line (the inert `pointcloud:` block stays), writes a
-`console_nav2_gated_*.yaml` temp copy, and passes *that* as `params_file` to
-`navigation.launch.py` — **your saved YAML is never modified**. Console passes
+`console_nav2_gated_*.yaml` temp copy, and passes *that* as `params_file` to nav2 — **your saved YAML is never modified**. Console passes
 `depth_costmap:=true|false` from the Bringup depth-sensor selection. `patcher.py`
 exposes the same transform for the in-browser editor:
 

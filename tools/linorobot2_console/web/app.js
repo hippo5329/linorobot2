@@ -407,7 +407,9 @@ document.getElementById("btn-install-depth").addEventListener("click", () =>
   runSensorInstall("depth", "install-depth", "depth-skip-udev", "Install depth camera"));
 
 // ---------- Docker / Podman install mode ----------
-// linorobot2 ships its own docker/docker-compose.yaml + Dockerfile that need
+// The console has its OWN compose stack at tools/linorobot2_console/docker/
+// (docker-compose.yaml + a generated .env + devices.generated.yaml). It reuses
+// the upstream linorobot2 image + docker/Dockerfile (built, not modified) but
 // no ROS install on this host at all -- sensor drivers install *inside* the
 // image via the Dockerfile's own `bash install.bash ...` step (that's
 // linorobot2's documented build process, not something Console runs on the
@@ -420,8 +422,16 @@ installModeSel.addEventListener("change", () => {
   document.getElementById("install-docker-card").style.display = isNative ? "none" : "block";
 });
 
+// The console's OWN compose dir -- it never writes into the repo's upstream
+// docker/ dir. `.env` + `devices.generated.yaml` are written here by
+// btn-docker-build; the checked-in docker-compose.yaml drives nav/SLAM
+// through the console's own launch_nav2.py / launch_bringup.py.
 function dockerDir() {
-  return `${ws()}/src/linorobot2/docker`;
+  return `${ws()}/src/linorobot2/tools/linorobot2_console/docker`;
+}
+// The -f overlay + --env-file the console always passes to compose.
+function dockerComposeFlags() {
+  return `--env-file .env -f docker-compose.yaml -f devices.generated.yaml`;
 }
 
 // Resolved at command-run time (not build time) since we can't be sure which
@@ -484,9 +494,9 @@ document.getElementById("btn-docker-build").addEventListener("click", () => {
     `VIRTUALGL_VER=3.1.4\n`;
 
   // Only the two device mappings docs/docker.md itself documents as a
-  // required manual step for the `bringup` service -- an override file
-  // (docker compose auto-merges *.override.yaml) so the vendored
-  // docker-compose.yaml is never edited in place.
+  // Base-serial + lidar device mappings for the console compose's `bringup`
+  // service, written as its OWN overlay file inside tools/linorobot2_console/
+  // docker/ -- the repo's docker/ dir is never written.
   const laserDevice = dockerLaserDevice(laser);
   const deviceLines = [`      - ${serialPort}:${serialPort}`];
   if (laserDevice) deviceLines.push(`      - ${laserDevice}:${laserDevice}`);
@@ -504,9 +514,9 @@ document.getElementById("btn-docker-build").addEventListener("click", () => {
     cloneLinorobot2Command(),
     `mkdir -p ${dir}`,
     `cat > ${dir}/.env << 'CONSOLE_DOCKER_ENV_EOF'\n${envBody}CONSOLE_DOCKER_ENV_EOF`,
-    `cat > ${dir}/docker-compose.override.yaml << 'CONSOLE_DOCKER_OVERRIDE_EOF'\n${overrideBody}CONSOLE_DOCKER_OVERRIDE_EOF`,
+    `cat > ${dir}/devices.generated.yaml << 'CONSOLE_DOCKER_OVERRIDE_EOF'\n${overrideBody}CONSOLE_DOCKER_OVERRIDE_EOF`,
     `cd ${dir}`,
-    `${composeResolveSnippet()}HOST_UID=$(id -u) HOST_GID=$(id -g) $COMPOSE build`,
+    `${composeResolveSnippet()}HOST_UID=$(id -u) HOST_GID=$(id -g) $COMPOSE ${dockerComposeFlags()} build`,
   ].join("\n");
   runCommand(cmd, { title: `Docker/Podman build (${baseImage})` });
 });
@@ -534,18 +544,18 @@ const btnDockerServiceStart = document.getElementById("btn-docker-service-start"
 const btnDockerServiceStop = document.getElementById("btn-docker-service-stop");
 btnDockerServiceStart.addEventListener("click", async () => {
   const service = document.getElementById("docker-service").value;
-  if (["slam", "navigate", "rviz-nav"].includes(service)) {
+  if (["slam", "navigate"].includes(service)) {
     if (isAutoBringupEnabled()) {
       await ensureBringupRunning();
     }
   }
   // linorobot2's own Tmuxinator profiles (docker/profiles/*.yml) always
   // `export DISPLAY=:200` before `docker compose up` -- GUI services
-  // (gazebo, rviz, rviz-nav, slam/navigate with rviz:=true) render into that
+  // (gazebo, rviz, slam/navigate with rviz:=true) render into that
   // virtual display, which the kasmvnc service then streams to a browser.
   // Skipping it isn't just "no picture" -- gz sim's GUI process crashes
   // outright trying to open an unset/invalid display.
-  const cmd = `${composeResolveSnippet()}cd ${dockerDir()} && DISPLAY=:200 $COMPOSE up ${service}`;
+  const cmd = `${composeResolveSnippet()}cd ${dockerDir()} && DISPLAY=:200 $COMPOSE ${dockerComposeFlags()} up ${service}`;
   btnDockerServiceStart.disabled = true;
   btnDockerServiceStop.disabled = false;
   runCommand(cmd, {
@@ -565,7 +575,7 @@ if (vncBtn) {
 }
 
 document.getElementById("btn-docker-down").addEventListener("click", () => {
-  const cmd = `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE down`;
+  const cmd = `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE ${dockerComposeFlags()} down`;
   runCommand(cmd, { title: "Docker/Podman: stop + remove all containers" });
 });
 
@@ -656,7 +666,7 @@ function isBringupAlive() {
 function bringupLaunchCommand() {
   const installMode = document.getElementById("install-mode")?.value;
   if (installMode === "docker" || installMode === "podman") {
-    return `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE up bringup`;
+    return `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE ${dockerComposeFlags()} up bringup`;
   }
   const c = state.config || {};
   const laser = document.getElementById("bringup-laser-sensor")?.value || "";

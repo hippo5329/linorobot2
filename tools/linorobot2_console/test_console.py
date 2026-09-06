@@ -240,6 +240,26 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertTrue(t2.endswith("ekf_mecanum.yaml"))
         self.assertTrue(srv._params_paths("slam")[1].endswith("config/slam.yaml"))
 
+    def test_console_owns_its_docker_compose(self):
+        """The console ships its own compose stack and never edits the repo's docker/."""
+        d = os.path.join(os.path.dirname(__file__), "docker")
+        with open(os.path.join(d, "docker-compose.yaml")) as fh:
+            compose = fh.read()
+        # nav/SLAM go through the console's own launchers, not linorobot2_navigation's
+        self.assertIn("tools/linorobot2_console/launch_nav2.py", compose)
+        self.assertIn("tools/linorobot2_console/launch_bringup.py", compose)
+        self.assertNotIn("linorobot2_navigation slam.launch.py", compose)
+        self.assertNotIn("linorobot2_navigation navigation.launch.py", compose)
+        # generated files are gitignored, not the checked-in compose
+        with open(os.path.join(d, ".gitignore")) as fh:
+            ign = fh.read()
+        self.assertIn(".env", ign)
+        self.assertIn("devices.generated.yaml", ign)
+        # upstream nav config left untouched (no console pointcloud edit)
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        with open(os.path.join(root, "linorobot2_navigation", "config", "navigation_jazzy.yaml")) as fh:
+            self.assertNotIn("scan pointcloud", fh.read())
+
     def test_depth_costmap_gate_is_console_only(self):
         """The depth->costmap gate lives in the console's launch_nav2.py; upstream navigation.launch.py is untouched."""
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

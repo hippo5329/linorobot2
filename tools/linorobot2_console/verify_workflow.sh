@@ -49,6 +49,21 @@ P /api/sensor_install_cmd '{"kind":"laser","key":"ldlidar","skip_udev":true}' | 
   && ok "/api/sensor_install_cmd" || no "/api/sensor_install_cmd"
 kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true
 
+step "console docker-compose ($DISTRO)"
+CD="$REPO/tools/linorobot2_console/docker"
+if command -v docker >/dev/null 2>&1; then
+  ( cd "$CD" && printf 'BASE_IMAGE=jazzy\nROBOT_BASE=2wd\nLASER_SENSOR=\nDEPTH_SENSOR=\n' > .env \
+    && printf 'services:\n  bringup:\n    devices: ["/dev/ttyACM0:/dev/ttyACM0"]\n' > devices.generated.yaml \
+    && docker compose --env-file .env -f docker-compose.yaml -f devices.generated.yaml config >/dev/null 2>&1 \
+    && grep -q "tools/linorobot2_console/launch_nav2.py" docker-compose.yaml ; rc=$? ; rm -f .env devices.generated.yaml ; exit $rc ) \
+    && ok "console compose validates + uses launch_nav2.py" || no "console compose"
+  grep -q "scan pointcloud" "$REPO/linorobot2_navigation/config/navigation_jazzy.yaml" \
+    && no "upstream navigation_jazzy.yaml must NOT have the console pointcloud edit" \
+    || ok "upstream nav configs untouched"
+else
+  echo "  SKIP  no docker in this env"
+fi
+
 step "launch-file introspection ($DISTRO)"
 if command -v ros2 >/dev/null && python3 -c "import launch,launch_ros" 2>/dev/null; then
   for lf in "$REPO/tools/linorobot2_console/launch_nav2.py" "$REPO/linorobot2_navigation/launch/navigation.launch.py" "/tmp/exp_$DISTRO/launch/nav2.launch.py"; do

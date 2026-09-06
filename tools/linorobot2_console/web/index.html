@@ -80,8 +80,9 @@
       </div>
       <p class="hint">Docker/Podman need no ROS install on this machine at all -- linorobot2's
         own <code>docker/Dockerfile</code> builds everything (including sensor drivers) inside
-        the image. Useful on unsupported OS versions, or when you'd rather not touch the host
-        at all. Native builds directly on this machine instead.</p>
+        the image; the console drives it from its own compose stack at
+        <code>tools/linorobot2_console/docker/</code>. Useful on unsupported OS versions, or when
+        you'd rather not touch the host. Native builds directly on this machine instead.</p>
     </div>
 
     <div id="install-native-cards">
@@ -136,12 +137,12 @@
           <label>GPU_ID (gazebo-cuda only) <input type="text" id="docker-gpu-id" value="0"></label>
         </div>
         <p class="hint">Writes <code>docker/.env</code> and a
-          <code>docker/docker-compose.override.yaml</code> mapping the base serial port and
-          laser device into the <code>bringup</code> service (the documented manual step in
-          linorobot2's own <code>docs/docker.md</code>), then clones linorobot2 (if not already
-          present) and runs the image build. Sensor drivers install <i>inside</i> the image via
-          linorobot2's own <code>install.bash</code> -- that's the documented Docker build path
-          itself, not something Console runs on this host.</p>
+          <code>tools/linorobot2_console/docker/.env</code> + <code>devices.generated.yaml</code>
+          (the base serial + lidar device mappings) into the <b>console's own</b> compose dir --
+          the repo's <code>docker/</code> is never written -- then clones linorobot2 (if needed)
+          and runs <code>docker compose --env-file .env -f docker-compose.yaml -f devices.generated.yaml build</code>.
+          Sensor drivers install <i>inside</i> the image via linorobot2's own <code>install.bash</code>
+          (the documented Docker build path, not run on this host).</p>
         <button id="btn-docker-build" class="btn btn-primary">Write config + build image</button>
       </div>
 
@@ -164,7 +165,6 @@
             <option value="navigate">navigate</option>
             <option value="save-map">save-map (one-shot)</option>
             <option value="rviz">rviz</option>
-            <option value="rviz-nav">rviz-nav</option>
             <option value="gazebo">gazebo (simulation)</option>
             <option value="dev">dev (shell container, sleeps)</option>
           </select>
@@ -242,7 +242,7 @@
       <h2>Visualize (RViz via browser)</h2>
       <p class="hint">Most robot computers are headless -- RViz has nowhere to open a window
         on. This runs RViz against a virtual display and serves it over noVNC, the same idea
-        as the <code>kasmvnc</code> service in linorobot2's own <code>docker/docker-compose.yaml</code>,
+        as the <code>kasmvnc</code> service in the console's <code>docker/docker-compose.yaml</code>,
         but native (no Docker) to match how the rest of Console installs things. Works whether
         you're viewing from the robot computer itself or a separate laptop on the network.</p>
       <p class="hint"><b>Heavier than the rest of Console</b> -- RViz is a full Qt/OpenGL app,
