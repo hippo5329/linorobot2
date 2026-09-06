@@ -29,10 +29,13 @@ class TestLinorobot2Console(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_config_path = server.CONFIG_PATH
+        self.orig_nav2_config_path = server.NAV2_CONFIG_PATH
         server.CONFIG_PATH = os.path.join(self.temp_dir, "test_console_config.json")
+        server.NAV2_CONFIG_PATH = os.path.join(self.temp_dir, "test_nav2_params.yaml")
 
     def tearDown(self):
         server.CONFIG_PATH = self.orig_config_path
+        server.NAV2_CONFIG_PATH = self.orig_nav2_config_path
         if os.path.exists(self.temp_dir):
             for root, dirs, files in os.walk(self.temp_dir, topdown=False):
                 for f in files:
@@ -47,7 +50,33 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertEqual(cfg["agent_device"], "/dev/ttyACM0")
         self.assertEqual(cfg["agent_port"], "8888")
         self.assertEqual(cfg["agent_baud"], "921600")
+        self.assertEqual(cfg.get("ros_distro"), "jazzy")
+        self.assertTrue(cfg.get("auto_bringup"))
         self.assertIn("workspace_path", cfg)
+
+    def test_bringup_runner_and_distros(self):
+        self.assertIsNotNone(server.bringup_runner)
+        self.assertFalse(server.bringup_runner.is_busy())
+        for d in ["jazzy", "lyrical", "rolling", "humble"]:
+            self.assertIn(d, server.SUPPORTED_DISTROS)
+
+    def test_nav2_config_endpoints(self):
+        for distro in ["jazzy", "lyrical", "rolling", "humble"]:
+            cfg = server.get_nav2_config(distro)
+            self.assertTrue(len(cfg) > 0, f"Empty config for {distro}")
+            self.assertIn("ros__parameters", cfg, f"ros__parameters not in {distro} config")
+            if distro == "humble":
+                self.assertIn("recoveries_server", cfg)
+            else:
+                self.assertIn("behavior_server", cfg)
+
+        orig_jazzy = server.get_nav2_config("jazzy")
+        test_content = "# custom test nav2 parameters\nros__parameters:\n  footprint: '[[0.25, 0.25], [-0.25, 0.25]]'\n"
+        path = server.save_nav2_config(test_content, "jazzy")
+        self.assertTrue(os.path.exists(path))
+        self.assertEqual(server.get_nav2_config("jazzy"), test_content)
+        # restore original
+        server.save_nav2_config(orig_jazzy, "jazzy")
 
     def test_save_and_load_config(self):
         new_cfg = {
@@ -98,6 +127,8 @@ class TestLinorobot2Console(unittest.TestCase):
                 self.assertIn("host_ip", data)
                 self.assertIn("os", data)
                 self.assertIn("agent_busy_console", data)
+                self.assertIn("bringup_busy_console", data)
+                self.assertIn("supported_distros", data)
                 self.assertIn("config", data)
         except Exception as e:
             self.skipTest(f"Console server not running on port 8090: {e}")

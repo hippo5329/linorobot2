@@ -19,8 +19,14 @@
     <span class="brand-title">Linorobot2 Console<span class="badge-accent">v1</span></span>
   </div>
   <div class="header-actions">
-    <span class="hdr-field" id="hdr-distro">ROS: <b>--</b></span>
+    <span class="hdr-field" id="hdr-distro">ROS: <select id="hdr-distro-select" class="distro-select" title="Switch ROS 2 Distribution">
+      <option value="jazzy">jazzy</option>
+      <option value="lyrical">lyrical</option>
+      <option value="rolling">rolling</option>
+      <option value="humble">humble</option>
+    </select></span>
     <span class="hdr-field" id="hdr-workspace">Workspace: <b>--</b></span>
+    <span class="hdr-field" id="hdr-bringup">Bringup: <span class="pill pill-unknown" id="hdr-bringup-pill">down</span></span>
     <span class="hdr-field" id="hdr-agent">Agent: <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span></span>
   </div>
 </header>
@@ -214,8 +220,16 @@
         /<code>/dev/rplidar</code> udev symlinks). For a custom serial path, baudrate, or the
         LiDAR-over-WiFi-UDP bridge, use the Laser driver card on the Sensors tab instead of
         going through Bringup.</p>
-      <button id="btn-bringup-start" class="btn btn-primary">Start bringup</button>
-      <button id="btn-bringup-stop" class="btn btn-danger" disabled>Stop</button>
+      <div class="row">
+        <button id="btn-bringup-start" class="btn btn-primary">Start bringup</button>
+        <button id="btn-bringup-stop" class="btn btn-danger" disabled>Stop</button>
+      </div>
+      <div class="row" style="margin-top: 8px;">
+        <label class="checkbox-label">
+          <input type="checkbox" id="bringup-auto-toggle" checked>
+          <span>Auto-launch Bringup when Teleop, SLAM, Nav, or Calibration starts</span>
+        </label>
+      </div>
     </div>
   </section>
 
@@ -270,21 +284,40 @@
     <div class="card">
       <h2>Navigation</h2>
       <div class="row">
-        <select id="nav-map-select"></select>
-        <button id="btn-refresh-maps" class="btn">Refresh</button>
+        <label>Map
+          <select id="nav-map-select"></select>
+        </label>
+        <button id="btn-refresh-maps" class="btn">Refresh maps</button>
       </div>
-      <p class="hint"><code>linorobot2_navigation</code>'s own launch file hardcodes
-        <code>params_file</code> to its bundled <code>config/navigation.yaml</code> -- there's
-        no launch argument to override it, and nav2's own recommended parameters/defaults move
-        faster than that bundled file gets updated. Leave the field below blank to use it
-        anyway, or fetch the params file that ships with your installed <code>nav2_bringup</code>
-        (tracks your ROS distro's actual current Nav2 release) and launch against that instead.</p>
+      <p class="hint">Console uses our custom Nav2 configuration (<code>console_nav2_params.yaml</code>) and Python launcher, allowing full parameter customization (footprint, planner, controller, costmaps, inflation) across ROS 2 distros.</p>
       <div class="row">
-        <input type="text" id="nav-params-file" placeholder="(blank = linorobot2_navigation's bundled config/navigation.yaml)">
-        <button id="btn-nav-fetch-latest-params" class="btn">Fetch nav2_bringup's current defaults</button>
+        <button id="btn-nav2-toggle-editor" class="btn">Edit Nav2 Parameters (YAML)</button>
+        <button id="btn-nav2-reset-defaults" class="btn">Reset to Defaults</button>
       </div>
-      <button id="btn-nav-start" class="btn btn-primary">Start navigation</button>
-      <button id="btn-nav-stop" class="btn btn-danger" disabled>Stop</button>
+      <div id="nav2-editor-box" style="display:none; margin-top: 10px;">
+        <div class="row" style="margin-bottom: 8px;">
+          <label>Config for ROS 2 Distro:
+            <select id="nav2-editor-distro">
+              <option value="jazzy">Jazzy (Ubuntu 24.04)</option>
+              <option value="lyrical">Lyrical (Ubuntu 26.04)</option>
+              <option value="rolling">Rolling (Development)</option>
+              <option value="humble">Humble (Ubuntu 22.04)</option>
+            </select>
+          </label>
+        </div>
+        <textarea id="nav2-config-text" rows="14" style="width: 100%; font-family: var(--font-mono); font-size: 12px; background: #0c121e; color: #cbd5e1; border: 1px solid var(--border-soft); border-radius: 6px; padding: 10px;"></textarea>
+        <div class="row" style="margin-top: 8px;">
+          <button id="btn-nav2-save-config" class="btn btn-primary">Save Nav2 Configuration</button>
+          <span id="nav2-save-status" class="hint" style="align-self: center;"></span>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <input type="text" id="nav-params-file" placeholder="(custom params file override, blank = active console_nav2_params.yaml)">
+      </div>
+      <div class="row" style="margin-top: 12px;">
+        <button id="btn-nav-start" class="btn btn-primary">Start navigation</button>
+        <button id="btn-nav-stop" class="btn btn-danger" disabled>Stop</button>
+      </div>
     </div>
   </section>
 
@@ -435,6 +468,27 @@
       <button id="btn-save-agent" class="btn">Save</button>
       <button id="btn-agent-ensure" class="btn btn-primary">Find / build / launch agent</button>
       <button id="btn-agent-stop" class="btn btn-danger" disabled>Stop agent</button>
+    </div>
+    <div class="card">
+      <h2>ROS 2 Distribution &amp; Automation</h2>
+      <div class="row">
+        <label>ROS 2 Distro
+          <select id="cfg-ros-distro">
+            <option value="jazzy">Jazzy (Ubuntu 24.04 LTS)</option>
+            <option value="lyrical">Lyrical (Ubuntu 26.04 Next-Gen)</option>
+            <option value="rolling">Rolling (Rolling Development)</option>
+            <option value="humble">Humble (Ubuntu 22.04 Legacy)</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="cfg-auto-bringup" checked>
+          <span>Automatically start Robot Bringup when Teleop, SLAM, Nav, or Calibration starts</span>
+        </label>
+      </div>
+      <p class="hint">Console automatically adapts ROS environment sourcing, git branch fallbacks (<code>$ROS_DISTRO</code> &rarr; <code>main</code> &rarr; <code>jazzy</code>), micro-ROS container images, and Nav2 launch configurations across distributions.</p>
+      <button id="btn-save-distro" class="btn">Save</button>
     </div>
   </section>
 

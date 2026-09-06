@@ -175,3 +175,19 @@ body {
   margin-top: 10px;
   display: block;
 }
+
+.distro-select {
+  background: #182235;
+  color: var(--text-primary);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+.pill-starting {
+  color: var(--accent-warn);
+  border-color: #eab30840;
+  background: #eab30814;
+}

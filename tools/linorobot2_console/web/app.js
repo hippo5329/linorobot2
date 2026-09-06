@@ -44,9 +44,9 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 // ---------- generic SSE command runner ----------
 // slot: "main" -> /api/exec ; "agent" -> /api/agent/exec
 function runCommand(command, { slot = "main", title = "Running", onDone, onLine } = {}) {
-  const endpoint = slot === "agent" ? "/api/agent/exec" : "/api/exec";
+  const endpoint = slot === "agent" ? "/api/agent/exec" : (slot === "bringup" ? "/api/bringup/exec" : "/api/exec");
   setConsoleTitle(title);
-  logLine(`$ ${title}`);
+  logLine(`$ [${slot}] ${title}`);
   return fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -83,7 +83,8 @@ function runCommand(command, { slot = "main", title = "Running", onDone, onLine 
           continue;
         }
         if (evType === "output") {
-          logLine(payload.line);
+          const prefix = (slot !== "main") ? `[${slot}] ` : "";
+          logLine(`${prefix}${payload.line}`);
           if (onLine) onLine(payload.line);
         } else if (evType === "done") {
           logLine(`[console] exited with code ${payload.exit_code}`);
@@ -95,18 +96,24 @@ function runCommand(command, { slot = "main", title = "Running", onDone, onLine 
 }
 
 function killSlot(slot) {
-  const endpoint = slot === "agent" ? "/api/agent/kill" : "/api/kill";
-  return fetch(endpoint, { method: "POST" });
+  const endpoint = slot === "agent" ? "/api/agent/kill" : (slot === "bringup" ? "/api/bringup/kill" : "/api/kill");
+  return fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slot }),
+  });
 }
 
 // pairs up a Start/Stop button with a command builder for long-running actions
-function wireStartStop({ startBtn, stopBtn, slot, title, buildCommand, needsAgent }) {
+function wireStartStop({ startBtn, stopBtn, slot, title, buildCommand, needsAgent, needsBringup }) {
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    const command = await buildCommand();
-    if (needsAgent) {
+    if (needsBringup) {
+      await ensureBringupRunning();
+    } else if (needsAgent) {
       await ensureAgentRunning();
     }
+    const command = await buildCommand();
     stopBtn.disabled = false;
     runCommand(command, {
       slot,
@@ -123,10 +130,28 @@ function wireStartStop({ startBtn, stopBtn, slot, title, buildCommand, needsAgen
 }
 
 // ---------- workspace / ros-env prefix ----------
+function getDistro() {
+  return (state.config && state.config.ros_distro) || (state.status && state.status.ros_distro) || "jazzy";
+}
+
 function envPrefix() {
+  const distro = getDistro();
   const ws = (state.config && state.config.workspace_path) || "~/linorobot2_ws";
-  return `source /opt/ros/$ROS_DISTRO/setup.bash 2>/dev/null || true; ` +
-         `[ -f ${ws}/install/setup.bash ] && source ${ws}/install/setup.bash; `;
+  return `export ROS_DISTRO=${distro}; ` +
+         `if [ -f /opt/ros/${distro}/setup.bash ]; then source /opt/ros/${distro}/setup.bash 2>/dev/null || true; ` +
+         `elif [ -f /opt/ros/jazzy/setup.bash ]; then source /opt/ros/jazzy/setup.bash 2>/dev/null || true; ` +
+         `elif [ -f /opt/ros/rolling/setup.bash ]; then source /opt/ros/rolling/setup.bash 2>/dev/null || true; ` +
+         `elif [ -f /opt/ros/humble/setup.bash ]; then source /opt/ros/humble/setup.bash 2>/dev/null || true; ` +
+         `fi; ` +
+         `[ -f ${ws}/install/setup.bash ] && source ${ws}/install/setup.bash 2>/dev/null || true; `;
+}
+
+function gitCloneDistroSnippet(repoUrl, targetDir) {
+  const distro = getDistro();
+  return `[ -d ${targetDir} ] || git clone -b ${distro} ${repoUrl} ${targetDir} 2>/dev/null || ` +
+         `git clone -b main ${repoUrl} ${targetDir} 2>/dev/null || ` +
+         `git clone -b jazzy ${repoUrl} ${targetDir} 2>/dev/null || ` +
+         `git clone ${repoUrl} ${targetDir}`;
 }
 
 function ws() {
@@ -143,16 +168,41 @@ async function refreshStatus() {
     state.mainBusy = s.main_busy;
     state.agentBusy = s.agent_busy_console;
 
-    document.getElementById("hdr-distro").innerHTML = `ROS: <b>${s.ros_distro || "not sourced"}</b>`;
+    const distroSel = document.getElementById("hdr-distro-select");
+    if (distroSel && s.ros_distro) {
+      distroSel.value = s.ros_distro;
+    }
+    const cfgDistroSel = document.getElementById("cfg-ros-distro");
+    if (cfgDistroSel && s.ros_distro) {
+      cfgDistroSel.value = s.ros_distro;
+    }
+
     document.getElementById("hdr-workspace").innerHTML =
       `Workspace: <b>${s.workspace_built ? "built" : "not built"}</b>`;
 
-    const pill = document.getElementById("hdr-agent-pill");
-    const alive = s.agent_alive_external || s.agent_busy_console;
-    pill.textContent = alive ? "running" : "down";
-    pill.className = "pill " + (alive ? "pill-ok" : "pill-off");
-
+    const agentPill = document.getElementById("hdr-agent-pill");
+    const agentAlive = s.agent_alive_external || s.agent_busy_console;
+    agentPill.textContent = agentAlive ? "running" : "down";
+    agentPill.className = "pill " + (agentAlive ? "pill-ok" : "pill-off");
     document.getElementById("btn-agent-stop").disabled = !s.agent_busy_console;
+
+    const bringupPill = document.getElementById("hdr-bringup-pill");
+    const bringupAlive = s.bringup_alive_external || s.bringup_busy_console;
+    if (bringupPill) {
+      bringupPill.textContent = bringupAlive ? "running" : "down";
+      bringupPill.className = "pill " + (bringupAlive ? "pill-ok" : "pill-off");
+    }
+    const bringupStartBtn = document.getElementById("btn-bringup-start");
+    const bringupStopBtn = document.getElementById("btn-bringup-stop");
+    if (bringupStartBtn) bringupStartBtn.disabled = s.bringup_busy_console;
+    if (bringupStopBtn) bringupStopBtn.disabled = !s.bringup_busy_console;
+
+    const autoBringupCfg = document.getElementById("cfg-auto-bringup");
+    const autoBringupToggle = document.getElementById("bringup-auto-toggle");
+    if (s.config && typeof s.config.auto_bringup === "boolean") {
+      if (autoBringupCfg) autoBringupCfg.checked = s.config.auto_bringup;
+      if (autoBringupToggle) autoBringupToggle.checked = s.config.auto_bringup;
+    }
 
     if (!document.getElementById("install-workspace").value) {
       document.getElementById("install-workspace").value = s.workspace_path;
@@ -252,7 +302,7 @@ document.getElementById("btn-install-base").addEventListener("click", () => {
   const cmd = [
     `mkdir -p ${workspace}/src`,
     `cd ${workspace}/src`,
-    `[ -d linorobot2 ] || git clone -b $ROS_DISTRO https://github.com/linorobot/linorobot2 linorobot2 || git clone https://github.com/linorobot/linorobot2 linorobot2`,
+    gitCloneDistroSnippet("https://github.com/linorobot/linorobot2", "linorobot2"),
     `touch linorobot2/linorobot2_gazebo/COLCON_IGNORE`,
     `cd ${workspace}`,
     `rosdep update`,
@@ -409,7 +459,7 @@ function cloneLinorobot2Command() {
   return [
     `mkdir -p ${workspace}/src`,
     `cd ${workspace}/src`,
-    `[ -d linorobot2 ] || git clone -b $ROS_DISTRO https://github.com/linorobot/linorobot2 linorobot2 || git clone https://github.com/linorobot/linorobot2 linorobot2`,
+    gitCloneDistroSnippet("https://github.com/linorobot/linorobot2", "linorobot2"),
   ].join(" && ");
 }
 
@@ -492,8 +542,13 @@ document.getElementById("btn-docker-udev").addEventListener("click", () => {
 
 const btnDockerServiceStart = document.getElementById("btn-docker-service-start");
 const btnDockerServiceStop = document.getElementById("btn-docker-service-stop");
-btnDockerServiceStart.addEventListener("click", () => {
+btnDockerServiceStart.addEventListener("click", async () => {
   const service = document.getElementById("docker-service").value;
+  if (["slam", "navigate", "rviz-nav"].includes(service)) {
+    if (isAutoBringupEnabled()) {
+      await ensureBringupRunning();
+    }
+  }
   // linorobot2's own Tmuxinator profiles (docker/profiles/*.yml) always
   // `export DISPLAY=:200` before `docker compose up` -- GUI services
   // (gazebo, rviz, rviz-nav, slam/navigate with rviz:=true) render into that
@@ -598,39 +653,94 @@ function ensureAgentRunning() {
 document.getElementById("btn-agent-ensure").addEventListener("click", () => ensureAgentRunning());
 document.getElementById("btn-agent-stop").addEventListener("click", () => killSlot("agent"));
 
+// ---------- auto-bringup & bringup launch helpers ----------
+function isAutoBringupEnabled() {
+  const el = document.getElementById("cfg-auto-bringup");
+  return el ? el.checked : true;
+}
+
+function isBringupAlive() {
+  return Boolean(state.status && (state.status.bringup_alive_external || state.status.bringup_busy_console));
+}
+
+function bringupLaunchCommand() {
+  const installMode = document.getElementById("install-mode")?.value;
+  if (installMode === "docker" || installMode === "podman") {
+    return `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE up bringup`;
+  }
+  const c = state.config || {};
+  const laser = document.getElementById("bringup-laser-sensor")?.value || "";
+  const depth = document.getElementById("bringup-depth-sensor")?.value || "";
+  const envs = `export LINOROBOT2_LASER_SENSOR="${laser}"; export LINOROBOT2_DEPTH_SENSOR="${depth}"; `;
+  const transportArgs = c.agent_transport === "udp4"
+    ? `micro_ros_transport:=udp4 micro_ros_port:=${c.agent_port || "8888"}`
+    : `micro_ros_transport:=serial base_serial_port:=${c.agent_device || "/dev/ttyACM0"}`;
+  const launcher = `${state.status?.web_dir || "."}/../launch_bringup.py`;
+  return envPrefix() + envs +
+    `if [ -f ${launcher} ]; then ` +
+    `ros2 launch ${launcher} ${transportArgs}; ` +
+    `else ` +
+    `ros2 launch linorobot2_bringup bringup.launch.py ${transportArgs}; ` +
+    `fi`;
+}
+
+async function ensureBringupRunning() {
+  if (!isAutoBringupEnabled()) return;
+  await refreshStatus();
+  if (isBringupAlive()) {
+    logLine("[console] Robot Bringup is already active.");
+    return;
+  }
+  logLine("[console] Action requires Robot Bringup -- automatically starting Bringup in background...");
+  const cmd = bringupLaunchCommand();
+  return new Promise((resolve) => {
+    const startBtn = document.getElementById("btn-bringup-start");
+    const stopBtn = document.getElementById("btn-bringup-stop");
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+
+    runCommand(cmd, {
+      slot: "bringup",
+      title: "Robot Bringup (Auto-Started)",
+      onDone: (exitCode) => {
+        if (startBtn) startBtn.disabled = false;
+        if (stopBtn) stopBtn.disabled = true;
+        if (state.status) state.status.bringup_busy_console = false;
+        refreshStatus();
+      },
+    });
+
+    if (state.status) state.status.bringup_busy_console = true;
+    const pill = document.getElementById("hdr-bringup-pill");
+    if (pill) {
+      pill.textContent = "starting...";
+      pill.className = "pill pill-starting";
+    }
+
+    setTimeout(() => {
+      refreshStatus();
+      logLine("[console] Robot Bringup initialized. Proceeding with requested action...");
+      resolve();
+    }, 3500);
+  });
+}
+
 // ---------- bringup ----------
-// bringup.launch.py -> default_robot.launch.py already starts its own
-// micro_ros_agent Node internally (when custom_robot is left at its default
-// "false"), using exactly these base_serial_port/micro_ros_transport/
-// micro_ros_port args -- so Bringup must NOT also go through
-// ensureAgentRunning()/the separate agent slot, or two agents would fight
-// over the same serial device or UDP port.
 wireStartStop({
   startBtn: document.getElementById("btn-bringup-start"),
   stopBtn: document.getElementById("btn-bringup-stop"),
-  slot: "main",
+  slot: "bringup",
   title: "Bringup",
-  buildCommand: async () => {
-    const c = state.config || {};
-    const laser = document.getElementById("bringup-laser-sensor").value;
-    const depth = document.getElementById("bringup-depth-sensor").value;
-    const envs = `export LINOROBOT2_LASER_SENSOR="${laser}"; export LINOROBOT2_DEPTH_SENSOR="${depth}"; `;
-    const transportArgs = c.agent_transport === "udp4"
-      ? `micro_ros_transport:=udp4 micro_ros_port:=${c.agent_port}`
-      : `micro_ros_transport:=serial base_serial_port:=${c.agent_device}`;
-    return envPrefix() + envs + `ros2 launch linorobot2_bringup bringup.launch.py ${transportArgs}`;
-  },
+  buildCommand: async () => bringupLaunchCommand(),
 });
 
 // ---------- teleop ----------
-// Teleop/SLAM/Navigation all assume Bringup (with its own agent) is already
-// running in another Console tab/session -- same two-terminal convention
-// linorobot2 itself uses. They don't launch or need a standalone agent.
 wireStartStop({
   startBtn: document.getElementById("btn-teleop-start"),
   stopBtn: document.getElementById("btn-teleop-stop"),
   slot: "main",
   title: "Gamepad teleop",
+  needsBringup: true,
   buildCommand: async () => {
     const axisLinear = document.getElementById("joy-axis-linear").value || 1;
     const scaleLinear = document.getElementById("joy-scale-linear").value || 0.5;
@@ -661,6 +771,7 @@ wireStartStop({
   stopBtn: document.getElementById("btn-slam-stop"),
   slot: "main",
   title: "SLAM",
+  needsBringup: true,
   buildCommand: async () => envPrefix() + "ros2 launch linorobot2_navigation slam.launch.py",
 });
 
@@ -694,19 +805,23 @@ wireStartStop({
   stopBtn: document.getElementById("btn-nav-stop"),
   slot: "main",
   title: "Navigation",
+  needsBringup: true,
   buildCommand: async () => {
     const mapPath = document.getElementById("nav-map-select").value;
     const mapArg = mapPath ? ` map:=${mapPath}` : "";
-    const paramsFile = document.getElementById("nav-params-file").value.trim();
-    if (paramsFile) {
-      // linorobot2_navigation's own launch file hardcodes params_file to its
-      // bundled config/navigation.yaml (not a LaunchConfiguration -- there's
-      // no argument that would override it), so a custom/newer params file
-      // means going straight to nav2_bringup instead of through that wrapper.
-      return envPrefix() +
-        `ros2 launch nav2_bringup bringup_launch.py${mapArg} params_file:=${paramsFile} use_sim_time:=false`;
-    }
-    return envPrefix() + `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}`;
+    const customParams = document.getElementById("nav-params-file").value.trim();
+    const launcher = `${state.status?.web_dir || "."}/../launch_nav2.py`;
+    const distro = getDistro();
+    const defaultParams = `${state.status?.web_dir || "."}/console_nav2_${distro}.yaml`;
+    const paramsArg = customParams ? ` params_file:=${customParams}` : ` params_file:=${defaultParams}`;
+    return envPrefix() +
+      `if [ -f ${launcher} ]; then ` +
+      `ros2 launch ${launcher}${mapArg}${paramsArg} distro:=${distro} sim:=false; ` +
+      `elif [ -f ${customParams || defaultParams} ]; then ` +
+      `ros2 launch nav2_bringup bringup_launch.py${mapArg}${paramsArg} use_sim_time:=false; ` +
+      `else ` +
+      `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}; ` +
+      `fi`;
   },
 });
 
@@ -817,6 +932,9 @@ btnFwStop.addEventListener("click", () => killSlot("main"));
 // ensureAgentRunning() either.
 document.getElementById("btn-mag-cal").addEventListener("click", async () => {
   if (!confirm("The robot will spin in place for about a minute. Clear the area, then continue?")) return;
+  if (isAutoBringupEnabled()) {
+    await ensureBringupRunning();
+  }
   const resultEl = document.getElementById("mag-cal-result");
   resultEl.textContent = "";
   const cmd = envPrefix() +
@@ -1036,3 +1154,136 @@ document.getElementById("btn-save-agent").addEventListener("click", () => {
     body: JSON.stringify(body),
   }).then(refreshStatus);
 });
+
+// ---------- Nav2 configuration editor (per-distro) ----------
+const nav2EditorBox = document.getElementById("nav2-editor-box");
+const btnNav2Toggle = document.getElementById("btn-nav2-toggle-editor");
+const nav2Textarea = document.getElementById("nav2-config-text");
+const nav2EditorDistro = document.getElementById("nav2-editor-distro");
+const btnNav2Save = document.getElementById("btn-nav2-save-config");
+const btnNav2Reset = document.getElementById("btn-nav2-reset-defaults");
+const nav2Status = document.getElementById("nav2-save-status");
+
+async function loadNav2Config(distro) {
+  const d = distro || (nav2EditorDistro ? nav2EditorDistro.value : getDistro());
+  if (nav2EditorDistro && nav2EditorDistro.value !== d) {
+    nav2EditorDistro.value = d;
+  }
+  try {
+    const res = await fetch(`/api/nav2_config?distro=${d}`);
+    const data = await res.json();
+    if (nav2Textarea && data.config) {
+      nav2Textarea.value = data.config;
+    }
+  } catch (e) {}
+}
+
+if (nav2EditorDistro) {
+  nav2EditorDistro.addEventListener("change", () => loadNav2Config(nav2EditorDistro.value));
+}
+
+if (btnNav2Toggle) {
+  btnNav2Toggle.addEventListener("click", () => {
+    if (!nav2EditorBox) return;
+    const isHidden = nav2EditorBox.style.display === "none";
+    nav2EditorBox.style.display = isHidden ? "block" : "none";
+    btnNav2Toggle.textContent = isHidden ? "Hide Nav2 Parameters" : "Edit Nav2 Parameters (YAML)";
+    if (isHidden) {
+      loadNav2Config(getDistro());
+    }
+  });
+}
+
+if (btnNav2Save) {
+  btnNav2Save.addEventListener("click", async () => {
+    if (!nav2Textarea) return;
+    const d = nav2EditorDistro ? nav2EditorDistro.value : getDistro();
+    btnNav2Save.disabled = true;
+    if (nav2Status) nav2Status.textContent = `Saving config for ${d}...`;
+    try {
+      const res = await fetch("/api/nav2_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distro: d, config: nav2Textarea.value }),
+      });
+      const data = await res.json();
+      if (nav2Status) {
+        nav2Status.textContent = data.status === "ok" ? `✓ Saved to console_nav2_${d}.yaml` : "Error saving";
+        setTimeout(() => { if (nav2Status) nav2Status.textContent = ""; }, 4000);
+      }
+    } catch (e) {
+      if (nav2Status) nav2Status.textContent = "Error: " + e.message;
+    } finally {
+      btnNav2Save.disabled = false;
+    }
+  });
+}
+
+if (btnNav2Reset) {
+  btnNav2Reset.addEventListener("click", async () => {
+    const d = nav2EditorDistro ? nav2EditorDistro.value : getDistro();
+    if (!confirm(`Reset Nav2 configuration for ${d} to default parameters?`)) return;
+    btnNav2Reset.disabled = true;
+    try {
+      const res = await fetch("/api/nav2_config/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distro: d }),
+      });
+      const data = await res.json();
+      if (data.config && nav2Textarea) {
+        nav2Textarea.value = data.config;
+        if (nav2Status) {
+          nav2Status.textContent = `✓ Reset ${d} to default parameters`;
+          setTimeout(() => { if (nav2Status) nav2Status.textContent = ""; }, 4000);
+        }
+      }
+    } catch (e) {
+      if (nav2Status) nav2Status.textContent = "Reset failed: " + e.message;
+    } finally {
+      btnNav2Reset.disabled = false;
+    }
+  });
+}
+
+loadNav2Config();
+
+// ---------- distro & auto-bringup settings sync ----------
+const hdrDistroSelect = document.getElementById("hdr-distro-select");
+if (hdrDistroSelect) {
+  hdrDistroSelect.addEventListener("change", () => {
+    const val = hdrDistroSelect.value;
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ros_distro: val }),
+    }).then(refreshStatus);
+  });
+}
+
+const btnSaveDistro = document.getElementById("btn-save-distro");
+if (btnSaveDistro) {
+  btnSaveDistro.addEventListener("click", () => {
+    const distro = document.getElementById("cfg-ros-distro")?.value || "jazzy";
+    const autoBringup = Boolean(document.getElementById("cfg-auto-bringup")?.checked);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ros_distro: distro, auto_bringup: autoBringup }),
+    }).then(refreshStatus);
+  });
+}
+
+const bringupAutoToggle = document.getElementById("bringup-auto-toggle");
+if (bringupAutoToggle) {
+  bringupAutoToggle.addEventListener("change", () => {
+    const autoBringup = bringupAutoToggle.checked;
+    const cfgAuto = document.getElementById("cfg-auto-bringup");
+    if (cfgAuto) cfgAuto.checked = autoBringup;
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_bringup: autoBringup }),
+    });
+  });
+}

@@ -24,9 +24,55 @@ from urllib.parse import urlparse
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tools/linorobot2_console/..
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(WEB_DIR, "console_config.json")
+CONFIG_DIR = os.path.join(os.path.dirname(WEB_DIR), "config")
+LINOROBOT2_ROOT = os.path.abspath(os.path.join(WEB_DIR, "../../.."))
+SUPPORTED_DISTROS = ["jazzy", "lyrical", "rolling", "humble"]
+NAV2_CONFIG_PATH = os.path.join(WEB_DIR, "console_nav2_jazzy.yaml")
+
+
+def get_nav2_config_path(distro=None):
+    if not distro or distro not in SUPPORTED_DISTROS:
+        distro = detect_ros_distro()
+    return os.path.join(WEB_DIR, f"console_nav2_{distro}.yaml")
+
+
+def get_nav2_default_path(distro=None):
+    if not distro or distro not in SUPPORTED_DISTROS:
+        distro = detect_ros_distro()
+    distro_tpl = os.path.join(CONFIG_DIR, f"nav2_{distro}.yaml")
+    if os.path.exists(distro_tpl):
+        return distro_tpl
+    return os.path.join(LINOROBOT2_ROOT, "linorobot2_navigation", "config", "navigation.yaml")
+
+
+def get_nav2_config(distro=None):
+    path = get_nav2_config_path(distro)
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return f.read()
+        except Exception:
+            pass
+    tpl_path = get_nav2_default_path(distro)
+    if os.path.exists(tpl_path):
+        try:
+            with open(tpl_path, "r") as f:
+                return f.read()
+        except Exception:
+            pass
+    return f"# Linorobot2 Nav2 Parameters ({distro})\n"
+
+
+def save_nav2_config(text, distro=None):
+    path = get_nav2_config_path(distro)
+    with open(path, "w") as f:
+        f.write(text)
+    return path
 
 DEFAULT_CONFIG = {
     "workspace_path": os.path.expanduser("~/linorobot2_ws"),
+    "ros_distro": "jazzy",
+    "auto_bringup": True,
     "agent_transport": "serial",   # "serial" | "udp4"
     "agent_device": "/dev/ttyACM0",
     "agent_port": "8888",
@@ -220,10 +266,39 @@ class ProcessRunner:
 
 main_runner = ProcessRunner("main")
 agent_runner = ProcessRunner("agent")
+bringup_runner = ProcessRunner("bringup")
 
 
 def detect_ros_distro():
-    return os.environ.get("ROS_DISTRO", "")
+    """Detect or load configured ROS 2 distribution, with automatic heuristics."""
+    try:
+        cfg = load_config()
+        if cfg.get("ros_distro") and cfg["ros_distro"] in SUPPORTED_DISTROS:
+            return cfg["ros_distro"]
+    except Exception:
+        pass
+
+    env_distro = os.environ.get("ROS_DISTRO", "").strip().lower()
+    if env_distro in SUPPORTED_DISTROS:
+        return env_distro
+
+    for d in ["jazzy", "lyrical", "rolling", "humble"]:
+        if os.path.isdir(f"/opt/ros/{d}"):
+            return d
+
+    try:
+        with open("/etc/os-release") as f:
+            c = f.read().lower()
+            if "noble" in c or "24.04" in c:
+                return "jazzy"
+            if "resolute" in c or "26.04" in c:
+                return "lyrical"
+            if "jammy" in c or "22.04" in c:
+                return "humble"
+    except Exception:
+        pass
+
+    return "jazzy"
 
 
 def workspace_built(ws):
@@ -240,6 +315,26 @@ def agent_externally_alive():
         return out.returncode == 0
     except Exception:
         return False
+
+
+def bringup_externally_alive():
+    """Bringup started outside Console (e.g. via terminal or docker) -- detected via process list."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "linorobot2_bringup|bringup.launch.py"], capture_output=True, text=True
+        )
+        if out.returncode == 0:
+            return True
+        for engine in ["docker", "podman"]:
+            d_out = subprocess.run(
+                [engine, "ps", "-q", "--filter", "name=bringup"],
+                capture_output=True, text=True, timeout=2
+            )
+            if d_out.returncode == 0 and d_out.stdout.strip():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -301,12 +396,15 @@ class Handler(BaseHTTPRequestHandler):
             ws = cfg["workspace_path"]
             self._send_json({
                 "ros_distro": distro,
+                "supported_distros": SUPPORTED_DISTROS,
                 "workspace_path": ws,
                 "workspace_built": workspace_built(ws),
                 "host_ip": get_host_ip(),
                 "os": sys.platform,
                 "agent_busy_console": agent_runner.is_busy(),
                 "agent_alive_external": agent_externally_alive(),
+                "bringup_busy_console": bringup_runner.is_busy(),
+                "bringup_alive_external": bringup_externally_alive(),
                 "main_busy": main_runner.is_busy(),
                 "web_dir": WEB_DIR,
                 "config": cfg,
@@ -321,6 +419,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "laser": {k: v["label"] for k, v in LASER_SENSORS.items()},
                 "depth": {k: v["label"] for k, v in DEPTH_SENSORS.items()},
+            })
+            return
+
+        if path == "/api/nav2_config":
+            query_params = dict(q.split("=") for q in parsed.query.split("&") if "=" in q)
+            requested_distro = query_params.get("distro") or detect_ros_distro()
+            cfg_path = get_nav2_config_path(requested_distro)
+            self._send_json({
+                "distro": requested_distro,
+                "config": get_nav2_config(requested_distro),
+                "path": cfg_path,
+                "exists": os.path.exists(cfg_path),
+                "supported_distros": SUPPORTED_DISTROS,
             })
             return
 
@@ -465,11 +576,25 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/exec":
             command = data.get("command", "")
-            self._stream_command(command, main_runner)
+            slot = data.get("slot", "main")
+            runner = bringup_runner if slot == "bringup" else (agent_runner if slot == "agent" else main_runner)
+            self._stream_command(command, runner)
             return
 
         if path == "/api/kill":
-            killed = main_runner.kill()
+            slot = data.get("slot", "main")
+            runner = bringup_runner if slot == "bringup" else (agent_runner if slot == "agent" else main_runner)
+            killed = runner.kill()
+            self._send_json({"killed": killed})
+            return
+
+        if path == "/api/bringup/exec":
+            command = data.get("command", "")
+            self._stream_command(command, bringup_runner)
+            return
+
+        if path == "/api/bringup/kill":
+            killed = bringup_runner.kill()
             self._send_json({"killed": killed})
             return
 
@@ -481,6 +606,28 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/agent/kill":
             killed = agent_runner.kill()
             self._send_json({"killed": killed})
+            return
+
+        if path == "/api/nav2_config":
+            distro = data.get("distro") or detect_ros_distro()
+            cfg_text = data.get("config", "")
+            if not cfg_text.strip():
+                self._send_json({"error": "Empty configuration"}, 400)
+                return
+            saved_path = save_nav2_config(cfg_text, distro)
+            self._send_json({"status": "ok", "distro": distro, "path": saved_path, "length": len(cfg_text)})
+            return
+
+        if path == "/api/nav2_config/reset":
+            distro = data.get("distro") or detect_ros_distro()
+            tpl_path = get_nav2_default_path(distro)
+            if os.path.exists(tpl_path):
+                with open(tpl_path, "r") as f:
+                    reset_content = f.read()
+                saved_path = save_nav2_config(reset_content, distro)
+                self._send_json({"status": "reset", "distro": distro, "config": reset_content, "path": saved_path})
+            else:
+                self._send_json({"error": f"Default template for {distro} not found"}, 404)
             return
 
         if path == "/api/import_config":

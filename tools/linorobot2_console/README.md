@@ -1,5 +1,7 @@
 # Linorobot2 Console
 
+> For a complete step-by-step walkthrough, see [QUICKSTART.md](QUICKSTART.md).
+
 A local browser UI for the ROS2 / robot-computer side of linorobot2: install
 the package and sensor drivers, run bringup/teleop/SLAM/navigation, calibrate
 the magnetometer, and watch a live LiDAR scan -- without hand-typing the
@@ -31,25 +33,25 @@ dependencies -- just the Python 3 standard library, same as config-engine.
   shells out to or sources `install.bash` anywhere, including for sensors.
   `install.bash` was used only as a reference for which commands/URLs are
   correct per sensor.
-- **Bringup** -- `linorobot2_bringup bringup.launch.py`, with the laser/depth
-  sensor model selected via `LINOROBOT2_LASER_SENSOR`/`LINOROBOT2_DEPTH_SENSOR`
-  and the agent transport/device/baud/port taken from Settings.
-  `bringup.launch.py` already starts its own `micro_ros_agent` internally
-  (via `default_robot.launch.py`) -- Console does **not** also auto-launch a
-  separate agent here, since two agents fighting over the same serial device
-  or UDP port would just break both.
-- **Teleop / SLAM / Navigation / magnetometer calibration** -- one-click
-  wrappers around the matching launch files/nodes. All four assume Bringup is
-  already running elsewhere (same two-terminal convention linorobot2 itself
-  uses) -- they need the base driver, agent, and sensor topics Bringup
-  provides, which a bare standalone agent alone wouldn't give them.
-- **Navigation** can optionally bypass `linorobot2_navigation`'s bundled
-  `config/navigation.yaml` (hardcoded into that launch file with no override
-  argument, and easily stale since Nav2's own recommended parameters change
-  release to release) and launch `nav2_bringup` directly against a params
-  file of your choosing -- including a one-click "fetch nav2_bringup's
-  current defaults" that copies whatever your installed `nav2_bringup`
-  package actually ships today.
+- **Bringup & Auto-Bringup** -- Tracked in its own dedicated `bringup` runner slot
+  (independent of the `main` and `agent` slots). Console features **Automatic Bringup**:
+  whenever Teleop, SLAM, Navigation, or Magnetometer calibration is triggered, Console
+  automatically checks if Bringup is already active. If not, it launches Bringup in the
+  background (via modular `launch_bringup.py`), waits for nodes and micro-ROS agent to
+  initialize, and seamlessly launches the requested action in the `main` slot.
+- **Multi-Distro ROS 2 Support** -- Full operational support for **Jazzy**, **Lyrical**,
+  **Rolling**, and **Humble**. A live distribution selector in the header dynamically
+  adapts environment variables (`$ROS_DISTRO`), APT package names, Git branch fallbacks
+  (`$ROS_DISTRO` -> `main` -> `jazzy`), and micro-ROS agent container tags.
+- **Per-Distro Nav2 Parameter Studio & Python Launcher** -- Console provides an in-browser
+  YAML parameter editor with dedicated configuration templates for each distribution:
+  `nav2_jazzy.yaml`, `nav2_lyrical.yaml`, `nav2_rolling.yaml` (using modern `behavior_server`
+  and `smoother_server`), and `nav2_humble.yaml` (using `recoveries_server`). It uses our own
+  modular `launch_nav2.py` Python launcher to provide fully configurable `params_file`, `map`,
+  and `sim` arguments without being locked into hardcoded upstream launch parameters.
+- **Teleop / SLAM / Navigation / magnetometer calibration** -- One-click actions with
+  automatic Bringup dependency resolution. Stop actions independently without terminating
+  the underlying Bringup driver.
 - **Laser driver** (Sensors tab) -- launches the laser model standalone,
   independent of Bringup and the agent, since the LiDAR talks to the robot
   computer directly. For the `ldlidar_stl_ros2`-family models (LD06/LD19/
