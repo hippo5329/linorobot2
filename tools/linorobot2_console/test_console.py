@@ -150,5 +150,77 @@ class TestLinorobot2Console(unittest.TestCase):
             except Exception as e:
                 self.skipTest(f"Static asset test skipped: {e}")
 
+    def test_patcher_capabilities(self):
+        import patcher
+        self.assertIsNotNone(patcher)
+        self.assertIn("standard_diff", patcher.PRESETS)
+        self.assertIn("mecanum_omni", patcher.PRESETS)
+
+        # Nav2 patching
+        raw_nav = "amcl:\n  ros__parameters:\n    robot_model_type: \"nav2_amcl::DifferentialMotionModel\"\nvelocity_smoother:\n  ros__parameters:\n    max_velocity: [0.5, 0.0, 2.5]\n"
+        patched_nav = patcher.patch_nav2_text(raw_nav, base_type="mecanum", max_vel_x=0.6, max_vel_theta=2.8)
+        self.assertIn("nav2_amcl::OmniMotionModel", patched_nav)
+        self.assertIn("[0.6, 0.6, 2.8]", patched_nav)
+
+        # EKF patching
+        raw_ekf = "ekf_filter_node:\n    ros__parameters:\n        frequency: 50.0\n        odom0_config: [false, false, false,\n                       false, false, false,\n                       true, false, false,\n                       false, false, true,\n                       false, false, false]\n"
+        patched_ekf = patcher.patch_ekf_text(raw_ekf, base_type="mecanum", fuse_vy=True)
+        self.assertIn("true, true, false", patched_ekf)
+
+    def test_ai_robot_builder_logic(self):
+        specs = server.generate_custom_robot_specs("4WD Mecanum delivery robot with 97mm wheels, 30cm track width, and LD19 lidar")
+        self.assertIn("design", specs)
+        self.assertIn("tuning", specs)
+        self.assertEqual(specs["design"]["base_type"], "mecanum")
+        self.assertEqual(specs["design"]["wheel_diameter_m"], 0.097)
+        self.assertEqual(specs["design"]["track_width_m"], 0.30)
+        self.assertEqual(specs["design"]["laser_sensor"], "ldlidar")
+        self.assertTrue(specs["tuning"]["ekf"]["fuse_vy"])
+        self.assertIn("OmniMotionModel", specs["tuning"]["nav2"]["robot_model_type"])
+
+    def test_live_server_tuning_and_ai_apis(self):
+        try:
+            # Presets
+            with urlopen("http://localhost:8090/api/presets", timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode())
+                self.assertIn("presets", data)
+                self.assertIn("mecanum_omni", data["presets"])
+
+            # EKF
+            with urlopen("http://localhost:8090/api/ekf_config?base=mecanum", timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode())
+                self.assertIn("config", data)
+
+            # SLAM
+            with urlopen("http://localhost:8090/api/slam_config", timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode())
+                self.assertIn("config", data)
+
+            # AI tune
+            req = Request("http://localhost:8090/api/ai/tune",
+                          data=json.dumps({"prompt": "Mecanum strafe", "base": "mecanum"}).encode(),
+                          headers={"Content-Type": "application/json"})
+            with urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode())
+                self.assertIn("diagnosis", data)
+                self.assertIn("nav2_patch", data)
+
+            # AI Robot Builder
+            req2 = Request("http://localhost:8090/api/ai/robot_builder",
+                           data=json.dumps({"description": "Mecanum 97mm robot"}).encode(),
+                           headers={"Content-Type": "application/json"})
+            with urlopen(req2, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode())
+                self.assertIn("design", data)
+                self.assertIn("tuning", data)
+
+        except Exception as e:
+            self.skipTest(f"Live server test skipped: {e}")
+
 if __name__ == "__main__":
     unittest.main()

@@ -1287,3 +1287,363 @@ if (bringupAutoToggle) {
     });
   });
 }
+
+
+// =========================================================
+// AI ROBOTICS TUNING & CUSTOM ROBOT BUILDER STUDIO
+// =========================================================
+function currentRosDistro() {
+  return getDistro();
+}
+
+let currentAiTuningAnalysis = null;
+let currentCustomRobotSpecs = null;
+
+// 1. AI Tuning Prompt & Chips
+const aiTunePrompt = document.getElementById("ai-tune-prompt");
+const btnAiTuneAsk = document.getElementById("btn-ai-tune-ask");
+const aiTuneOutput = document.getElementById("ai-tune-output");
+const aiTuneDiag = document.getElementById("ai-tune-diagnosis");
+const aiTuneRecs = document.getElementById("ai-tune-recs");
+const btnAiTuneApply = document.getElementById("btn-ai-tune-apply");
+const aiTuneStatus = document.getElementById("ai-tune-status");
+
+document.querySelectorAll(".btn-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (aiTunePrompt) {
+      aiTunePrompt.value = btn.getAttribute("data-prompt") || "";
+      if (btnAiTuneAsk) btnAiTuneAsk.click();
+    }
+  });
+});
+
+if (btnAiTuneAsk) {
+  btnAiTuneAsk.addEventListener("click", async () => {
+    const prompt = (aiTunePrompt?.value || "").trim();
+    if (!prompt) return;
+    btnAiTuneAsk.disabled = true;
+    if (aiTuneStatus) aiTuneStatus.textContent = "Analyzing robotics dynamics...";
+    try {
+      const distro = currentRosDistro();
+      const base = document.getElementById("tune-base-type")?.value || "2wd";
+      const res = await fetch("/api/ai/tune", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, distro, base }),
+      });
+      const data = await res.json();
+      currentAiTuningAnalysis = data;
+      if (aiTuneOutput) aiTuneOutput.style.display = "block";
+      if (aiTuneDiag) aiTuneDiag.textContent = "🩺 " + (data.diagnosis || "No diagnosis.");
+      if (aiTuneRecs) {
+        aiTuneRecs.innerHTML = (data.recommendations || []).map((r) => `<li>${escapeHtml(r)}</li>`).join("");
+      }
+      if (aiTuneStatus) aiTuneStatus.textContent = "Analysis complete.";
+    } catch (e) {
+      if (aiTuneStatus) aiTuneStatus.textContent = "Error: " + e.message;
+    } finally {
+      btnAiTuneAsk.disabled = false;
+    }
+  });
+}
+
+if (btnAiTuneApply) {
+  btnAiTuneApply.addEventListener("click", async () => {
+    if (!currentAiTuningAnalysis) return;
+    btnAiTuneApply.disabled = true;
+    if (aiTuneStatus) aiTuneStatus.textContent = "Applying patches...";
+    try {
+      const distro = currentRosDistro();
+      const res = await fetch("/api/ai/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nav2_patch: currentAiTuningAnalysis.nav2_patch,
+          ekf_patch: currentAiTuningAnalysis.ekf_patch,
+          slam_patch: currentAiTuningAnalysis.slam_patch,
+          distro,
+        }),
+      });
+      const data = await res.json();
+      if (aiTuneStatus) aiTuneStatus.textContent = "✓ Applied AI recommendations to Nav2, EKF & SLAM!";
+      loadNav2Config();
+      loadEkfConfig();
+      loadSlamConfig();
+      setTimeout(() => { if (aiTuneStatus) aiTuneStatus.textContent = ""; }, 5000);
+    } catch (e) {
+      if (aiTuneStatus) aiTuneStatus.textContent = "Apply failed: " + e.message;
+    } finally {
+      btnAiTuneApply.disabled = false;
+    }
+  });
+}
+
+// 2. Presets Selector
+const btnApplyPreset = document.getElementById("btn-apply-preset");
+const tunePresetSelect = document.getElementById("tune-preset-select");
+if (btnApplyPreset && tunePresetSelect) {
+  btnApplyPreset.addEventListener("click", async () => {
+    const preset = tunePresetSelect.value;
+    btnApplyPreset.disabled = true;
+    try {
+      const distro = currentRosDistro();
+      const res = await fetch("/api/presets/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset, distro }),
+      });
+      const data = await res.json();
+      alert(`Applied preset '${data.label}'! Nav2, EKF, and SLAM configs updated.`);
+      loadNav2Config();
+      loadEkfConfig();
+      loadSlamConfig();
+    } catch (e) {
+      alert("Failed to apply preset: " + e.message);
+    } finally {
+      btnApplyPreset.disabled = false;
+    }
+  });
+}
+
+// 3. Interactive Quick Tuning
+const btnApplyInteractive = document.getElementById("btn-apply-interactive-tuning");
+const interactiveStatus = document.getElementById("tune-interactive-status");
+if (btnApplyInteractive) {
+  btnApplyInteractive.addEventListener("click", async () => {
+    btnApplyInteractive.disabled = true;
+    if (interactiveStatus) interactiveStatus.textContent = "Saving tuning...";
+    try {
+      const distro = currentRosDistro();
+      const base = document.getElementById("tune-base-type")?.value || "2wd";
+      const max_vel_x = parseFloat(document.getElementById("tune-max-vel-x")?.value || "0.5");
+      const max_vel_y = parseFloat(document.getElementById("tune-max-vel-y")?.value || "0.0");
+      const max_vel_theta = parseFloat(document.getElementById("tune-max-vel-theta")?.value || "2.5");
+      const max_accel_x = parseFloat(document.getElementById("tune-max-accel-x")?.value || "2.5");
+      const max_accel_theta = parseFloat(document.getElementById("tune-max-accel-theta")?.value || "3.2");
+      const inflation_radius = parseFloat(document.getElementById("tune-inflation-radius")?.value || "0.7");
+      const cost_scaling_factor = parseFloat(document.getElementById("tune-cost-scaling")?.value || "3.0");
+
+      const ekf_freq = parseFloat(document.getElementById("tune-ekf-freq")?.value || "50");
+      const fuse_vy = Boolean(document.getElementById("tune-fuse-vy")?.checked);
+      const fuse_imu_yaw = Boolean(document.getElementById("tune-fuse-imu-yaw")?.checked);
+
+      const slam_res = parseFloat(document.getElementById("tune-slam-res")?.value || "0.05");
+
+      // Patch Nav2
+      await fetch("/api/nav2_config/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          distro, base, max_vel_x, max_vel_y, max_vel_theta,
+          max_accel_x, max_accel_theta, inflation_radius, cost_scaling_factor
+        }),
+      });
+
+      // Patch EKF
+      await fetch("/api/ekf_config/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base, frequency: ekf_freq, fuse_vy, fuse_imu_yaw
+        }),
+      });
+
+      // Patch SLAM
+      await fetch("/api/slam_config/patch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution: slam_res }),
+      });
+
+      if (interactiveStatus) interactiveStatus.textContent = "✓ Applied tuning parameters across configs!";
+      loadNav2Config();
+      loadEkfConfig();
+      loadSlamConfig();
+      setTimeout(() => { if (interactiveStatus) interactiveStatus.textContent = ""; }, 4000);
+    } catch (e) {
+      if (interactiveStatus) interactiveStatus.textContent = "Tuning failed: " + e.message;
+    } finally {
+      btnApplyInteractive.disabled = false;
+    }
+  });
+}
+
+// 4. EKF & SLAM Editors
+const ekfTextarea = document.getElementById("ekf-config-text");
+const btnEkfSave = document.getElementById("btn-ekf-save-config");
+const btnEkfReset = document.getElementById("btn-ekf-reset-defaults");
+const ekfStatus = document.getElementById("ekf-save-status");
+
+async function loadEkfConfig() {
+  if (!ekfTextarea) return;
+  try {
+    const base = document.getElementById("tune-base-type")?.value || "2wd";
+    const res = await fetch(`/api/ekf_config?base=${base}`);
+    const data = await res.json();
+    if (data.config) ekfTextarea.value = data.config;
+  } catch (e) {}
+}
+
+if (btnEkfSave && ekfTextarea) {
+  btnEkfSave.addEventListener("click", async () => {
+    try {
+      const res = await fetch("/api/ekf_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: ekfTextarea.value }),
+      });
+      if (ekfStatus) ekfStatus.textContent = "✓ Saved EKF configuration";
+      setTimeout(() => { if (ekfStatus) ekfStatus.textContent = ""; }, 3000);
+    } catch (e) {
+      if (ekfStatus) ekfStatus.textContent = "Save failed: " + e.message;
+    }
+  });
+}
+
+if (btnEkfReset && ekfTextarea) {
+  btnEkfReset.addEventListener("click", async () => {
+    try {
+      const base = document.getElementById("tune-base-type")?.value || "2wd";
+      const res = await fetch("/api/ekf_config/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base }),
+      });
+      const data = await res.json();
+      if (data.config) ekfTextarea.value = data.config;
+      if (ekfStatus) ekfStatus.textContent = "✓ Reset EKF to default";
+      setTimeout(() => { if (ekfStatus) ekfStatus.textContent = ""; }, 3000);
+    } catch (e) {
+      if (ekfStatus) ekfStatus.textContent = "Reset failed: " + e.message;
+    }
+  });
+}
+
+const slamTextarea = document.getElementById("slam-config-text");
+const btnSlamSave = document.getElementById("btn-slam-save-config");
+const btnSlamReset = document.getElementById("btn-slam-reset-defaults");
+const slamStatus = document.getElementById("slam-save-status");
+
+async function loadSlamConfig() {
+  if (!slamTextarea) return;
+  try {
+    const res = await fetch("/api/slam_config");
+    const data = await res.json();
+    if (data.config) slamTextarea.value = data.config;
+  } catch (e) {}
+}
+
+if (btnSlamSave && slamTextarea) {
+  btnSlamSave.addEventListener("click", async () => {
+    try {
+      await fetch("/api/slam_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config: slamTextarea.value }),
+      });
+      if (slamStatus) slamStatus.textContent = "✓ Saved SLAM configuration";
+      setTimeout(() => { if (slamStatus) slamStatus.textContent = ""; }, 3000);
+    } catch (e) {
+      if (slamStatus) slamStatus.textContent = "Save failed: " + e.message;
+    }
+  });
+}
+
+if (btnSlamReset && slamTextarea) {
+  btnSlamReset.addEventListener("click", async () => {
+    try {
+      const res = await fetch("/api/slam_config/reset", { method: "POST" });
+      const data = await res.json();
+      if (data.config) slamTextarea.value = data.config;
+      if (slamStatus) slamStatus.textContent = "✓ Reset SLAM to default";
+      setTimeout(() => { if (slamStatus) slamStatus.textContent = ""; }, 3000);
+    } catch (e) {
+      if (slamStatus) slamStatus.textContent = "Reset failed: " + e.message;
+    }
+  });
+}
+
+loadEkfConfig();
+loadSlamConfig();
+
+// 5. AI Custom Robot Builder Studio
+const aiRobotPrompt = document.getElementById("ai-robot-prompt");
+const btnAiRobotGenerate = document.getElementById("btn-ai-robot-generate");
+const aiRobotSpecBox = document.getElementById("ai-robot-spec-box");
+const btnAiRobotDeploy = document.getElementById("btn-ai-robot-deploy");
+const aiRobotDeployStatus = document.getElementById("ai-robot-deploy-status");
+
+document.querySelectorAll(".btn-robot-chip").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (aiRobotPrompt) {
+      aiRobotPrompt.value = btn.getAttribute("data-robot") || "";
+      if (btnAiRobotGenerate) btnAiRobotGenerate.click();
+    }
+  });
+});
+
+if (btnAiRobotGenerate) {
+  btnAiRobotGenerate.addEventListener("click", async () => {
+    const description = (aiRobotPrompt?.value || "").trim();
+    if (!description) return;
+    btnAiRobotGenerate.disabled = true;
+    try {
+      const res = await fetch("/api/ai/robot_builder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+      const data = await res.json();
+      currentCustomRobotSpecs = data;
+
+      if (aiRobotSpecBox) aiRobotSpecBox.style.display = "block";
+      const des = data.design || {};
+      const specBase = document.getElementById("spec-base");
+      const specWheel = document.getElementById("spec-wheel");
+      const specTrack = document.getElementById("spec-track");
+      const specWheelbase = document.getElementById("spec-wheelbase");
+      const specLidar = document.getElementById("spec-lidar");
+
+      if (specBase) specBase.textContent = des.title || (data.base || "").toUpperCase();
+      if (specWheel) specWheel.textContent = (des.wheel_diameter_m ? (des.wheel_diameter_m * 1000) + "mm" : "-");
+      if (specTrack) specTrack.textContent = (des.track_width_m ? (des.track_width_m * 1000) + "mm" : "-");
+      if (specWheelbase) specWheelbase.textContent = (des.wheelbase_m ? (des.wheelbase_m * 1000) + "mm" : "0mm (2WD)");
+      if (specLidar) specLidar.textContent = des.laser_name || (data.laser_sensor || "").toUpperCase();
+
+      const wf = document.getElementById("spec-workflow");
+      if (wf && data.workflow) {
+        wf.innerHTML = data.workflow.map((s) => `<div>${escapeHtml(s)}</div>`).join("");
+      }
+    } catch (e) {
+      alert("Failed to generate robot specs: " + e.message);
+    } finally {
+      btnAiRobotGenerate.disabled = false;
+    }
+  });
+}
+
+if (btnAiRobotDeploy) {
+  btnAiRobotDeploy.addEventListener("click", async () => {
+    if (!currentCustomRobotSpecs) return;
+    btnAiRobotDeploy.disabled = true;
+    if (aiRobotDeployStatus) aiRobotDeployStatus.textContent = "Deploying custom robot architecture...";
+    try {
+      const distro = currentRosDistro();
+      const res = await fetch("/api/ai/deploy_robot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ specs: currentCustomRobotSpecs, distro }),
+      });
+      const data = await res.json();
+      if (aiRobotDeployStatus) aiRobotDeployStatus.textContent = "✓ " + (data.message || "Custom robot deployed successfully!");
+      loadNav2Config();
+      loadEkfConfig();
+      loadSlamConfig();
+      setTimeout(() => { if (aiRobotDeployStatus) aiRobotDeployStatus.textContent = ""; }, 6000);
+    } catch (e) {
+      if (aiRobotDeployStatus) aiRobotDeployStatus.textContent = "Deployment failed: " + e.message;
+    } finally {
+      btnAiRobotDeploy.disabled = false;
+    }
+  });
+}

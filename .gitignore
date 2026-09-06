@@ -3,4 +3,5 @@ __pycache__
 *.pyc
 **/__pycache__/**
 **.pyc
-COLCON_IGNORE
+COLCON_IGNOREconsole_*.yaml
+**/console_*.yaml
