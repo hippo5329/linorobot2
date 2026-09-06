@@ -833,27 +833,17 @@ wireStartStop({
     const defaultParams = `${state.status?.web_dir || "."}/console_nav2_${distro}.yaml`;
     const paramsArg = customParams ? ` params_file:=${customParams}` : ` params_file:=${defaultParams}`;
 
-    // Gate the depth camera in/out of the costmap observation_sources to match
-    // the selected Bringup depth sensor (skip when a custom params file is used
-    // -- that's the user's own, don't rewrite it).
-    if (!customParams) {
-      const depthEnabled = Boolean(document.getElementById("bringup-depth-sensor")?.value);
-      try {
-        await fetch("/api/nav2_config/costmap_sources", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ distro, depth_enabled: depthEnabled }),
-        });
-        if (nav2Textarea) loadNav2Config(distro);
-      } catch (e) { /* non-fatal */ }
-    }
+    // Depth camera -> costmap: our launch script generates a gated copy of the
+    // params file at launch (it never mutates the editable YAML). Pass an
+    // explicit true/false from the Bringup depth-sensor selection.
+    const depthArg = ` depth_costmap:=${document.getElementById("bringup-depth-sensor")?.value ? "true" : "false"}`;
     return envPrefix() +
       `if [ -f ${launcher} ]; then ` +
-      `ros2 launch ${launcher}${mapArg}${paramsArg} distro:=${distro} sim:=false; ` +
+      `ros2 launch ${launcher}${mapArg}${paramsArg}${depthArg} distro:=${distro} sim:=false; ` +
       `elif [ -f ${customParams || defaultParams} ]; then ` +
       `ros2 launch nav2_bringup bringup_launch.py${mapArg}${paramsArg} use_sim_time:=false; ` +
       `else ` +
-      `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}; ` +
+      `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}${depthArg}; ` +
       `fi`;
   },
 });
@@ -1232,7 +1222,9 @@ async function loadNav2Config(distro) {
       const on = data.depth_pointcloud_active;
       hint.textContent = on === null || on === undefined
         ? ""
-        : `Depth camera → costmap: ${on ? "ON (observation_sources: scan pointcloud)" : "off (lidar only)"} — set automatically from the Bringup depth-sensor selection when you Start navigation.`;
+        : `This file lists observation_sources: ${on ? "scan pointcloud" : "scan"}. ` +
+          `At launch, launch_nav2.py passes depth_costmap:=<true|false> from the Bringup ` +
+          `depth-sensor selection and generates a gated copy if needed — your saved YAML is not modified.`;
     }
   } catch (e) {}
 }

@@ -137,11 +137,22 @@ The `collision_monitor` (a fast safety loop) is deliberately kept LiDAR-only.
 
 **Gating.** An `observation_sources` entry whose topic never publishes just logs
 a periodic "observation buffer has not been updated" warning — harmless but
-noisy on a robot with no depth camera. Console removes `pointcloud` from
-`observation_sources` (the `pointcloud:` block stays, inert) whenever no depth
-sensor is selected on the **Bringup** tab, and restores it when one is —
-applied automatically to `console_nav2_<distro>.yaml` when you press **Start
-navigation**. `patcher.py` exposes this directly:
+noisy on a robot with no depth camera. The **launch script** handles this, not
+a config rewrite: `navigation.launch.py` (and the console's `launch_nav2.py`
+which forwards to it) takes a `depth_costmap` argument —
+
+| `depth_costmap:=` | effect |
+| :--- | :--- |
+| `auto` (default) | on iff `LINOROBOT2_DEPTH_SENSOR` is set (same env var `linorobot2_bringup` uses) |
+| `true` | force the pointcloud source on |
+| `false` | force it off |
+
+When off, the launcher reads the resolved params file, strips `pointcloud`
+from every `observation_sources` line (the inert `pointcloud:` block stays),
+writes a `linorobot2_nav2_*.yaml` temp copy, and hands *that* to
+`nav2_bringup` — **your saved YAML is never modified**. Console passes
+`depth_costmap:=true|false` from the Bringup depth-sensor selection. `patcher.py`
+exposes the same transform for the in-browser editor:
 
 ```python
 patcher.patch_costmap_sources(text, depth_enabled=False)  # -> observation_sources: scan

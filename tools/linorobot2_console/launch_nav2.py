@@ -77,6 +77,7 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
                 'base': base,
                 'params_file': selected_params,
                 'slam_params_file': selected_slam_params,
+                'depth_costmap': LaunchConfiguration('depth_costmap'),
                 'map': LaunchConfiguration('map'),
                 'sim': LaunchConfiguration('sim'),
                 'rviz': LaunchConfiguration('rviz'),
@@ -119,6 +120,11 @@ def generate_launch_description():
             name='slam_params_file',
             default_value='',
             description='Path to SLAM parameters file (blank = auto-resolve)'
+        ),
+        DeclareLaunchArgument(
+            name='depth_costmap',
+            default_value='auto',
+            description="Depth-camera pointcloud into costmap: 'auto' | 'true' | 'false'"
         ),
         DeclareLaunchArgument(
             name='map',
