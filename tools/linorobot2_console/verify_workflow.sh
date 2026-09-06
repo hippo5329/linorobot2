@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Console workflow verification for one ROS 2 distro environment.
+# Usage: verify_console.sh <distro>   (run inside a ros:<distro>-ros-base container/box)
+set -o pipefail
+DISTRO="${1:-jazzy}"
+REPO="${REPO:-/repo}"
+PASS=0; FAIL=0
+ok(){ echo "  PASS  $*"; PASS=$((PASS+1)); }
+no(){ echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
+step(){ echo; echo "== $* =="; }
+
+export ROS_DISTRO="$DISTRO"
+{ set +u; [ -f "/opt/ros/$DISTRO/setup.bash" ] && source "/opt/ros/$DISTRO/setup.bash" 2>/dev/null; set -e; } || true
+
+step "unit suites"
+( cd "$REPO/tools/linorobot2_console" && python3 test_console.py 2>&1 | tail -3 | grep -q "^OK" ) \
+  && ok "linorobot2_console test_console.py" || no "test_console.py"
+if [ -d "$REPO/../linorobot2_hardware/tools/robot_config_engine" ]; then
+  ( cd "$REPO/../linorobot2_hardware/tools/robot_config_engine" && python3 test_config_engine.py 2>&1 | tail -3 | grep -q "^OK" ) \
+    && ok "robot_config_engine test_config_engine.py" || no "test_config_engine.py"
+fi
+
+step "console server + REST smoke ($DISTRO)"
+cd "$REPO/tools/linorobot2_console/web"
+rm -f console_nav2_*.yaml console_ekf.yaml console_slam.yaml console_config.json
+python3 server.py 8199 >/tmp/console_srv.log 2>&1 & SRV=$!
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:8199/api/status && break; sleep 0.25; done
+G(){ curl -s "http://127.0.0.1:8199$1"; }
+P(){ curl -s -XPOST "http://127.0.0.1:8199$1" -H 'Content-Type: application/json' -d "$2"; }
+
+G /api/status | grep -q '"ros_distro"' && ok "/api/status" || no "/api/status"
+G /api/sensors | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["laser"]["ldlidar"]["models"];assert d["depth"]["realsense"]' \
+  && ok "/api/sensors registry" || no "/api/sensors"
+G /api/serial_ports | python3 -c 'import sys,json;json.load(sys.stdin)["ports"]' && ok "/api/serial_ports" || no "/api/serial_ports"
+G "/api/nav2_config?distro=$DISTRO" | python3 -c "import sys,json;d=json.load(sys.stdin);assert d['depth_pointcloud_active'] in (True,False,None);assert 'config' in d" \
+  && ok "/api/nav2_config?distro=$DISTRO" || no "/api/nav2_config"
+P /api/nav2_config/costmap_sources "{\"distro\":\"$DISTRO\",\"depth_enabled\":false}" | grep -q '"depth_pointcloud_active": false' \
+  && ok "costmap_sources gate off" || no "costmap_sources gate off"
+P /api/nav2_config/costmap_sources "{\"distro\":\"$DISTRO\",\"depth_enabled\":true}" | grep -q '"depth_pointcloud_active": true' \
+  && ok "costmap_sources gate on" || no "costmap_sources gate on"
+P /api/ai/tune '{"prompt":"robot overshoots the goal and blows past","base":"2wd"}' | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["nav2_patch"].get("max_decel_x")==2.8' \
+  && ok "AI tune overshoot" || no "AI tune"
+P /api/params/export "{\"dest_dir\":\"/tmp/exp_$DISTRO\",\"distros\":[\"$DISTRO\"]}" | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["count"]>=6;assert any("nav2.launch.py" in f["path"] for f in d["files"])' \
+  && ok "/api/params/export bundle" || no "/api/params/export"
+python3 -c "compile(open('/tmp/exp_$DISTRO/launch/nav2.launch.py').read(),'x','exec')" && ok "exported launcher compiles" || no "exported launcher"
+P /api/params/merge "{\"kind\":\"nav2\",\"distro\":\"$DISTRO\",\"target\":\"template\",\"dry_run\":true}" | grep -q '"status": "dry-run"' \
+  && ok "/api/params/merge dry-run" || no "/api/params/merge"
+P /api/sensor_install_cmd '{"kind":"laser","key":"ldlidar","skip_udev":true}' | grep -q ldlidar_stl_ros2 \
+  && ok "/api/sensor_install_cmd" || no "/api/sensor_install_cmd"
+kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+
+step "launch-file introspection ($DISTRO)"
+if command -v ros2 >/dev/null && python3 -c "import launch,launch_ros" 2>/dev/null; then
+  for lf in "$REPO/tools/linorobot2_console/launch_nav2.py" "$REPO/linorobot2_navigation/launch/navigation.launch.py" "/tmp/exp_$DISTRO/launch/nav2.launch.py"; do
+    python3 - "$lf" <<'PY' && ok "generate_launch_description $(basename "$lf")" || no "launch parse $(basename "$lf")"
+import importlib.util,sys
+s=importlib.util.spec_from_file_location("m",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.generate_launch_description()
+PY
+  done
+  grep -q depth_costmap "$REPO/linorobot2_navigation/launch/navigation.launch.py" && no "upstream navigation.launch.py must NOT have depth_costmap" || ok "upstream launcher untouched (no depth_costmap)"
+else
+  echo "  SKIP  no launch/launch_ros in this env"
+fi
+
+step "RESULT ($DISTRO):  $PASS passed, $FAIL failed"
+exit $((FAIL>0))
