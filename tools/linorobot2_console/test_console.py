@@ -57,18 +57,15 @@ class TestLinorobot2Console(unittest.TestCase):
     def test_bringup_runner_and_distros(self):
         self.assertIsNotNone(server.bringup_runner)
         self.assertFalse(server.bringup_runner.is_busy())
-        for d in ["jazzy", "lyrical", "rolling", "humble"]:
-            self.assertIn(d, server.SUPPORTED_DISTROS)
+        self.assertEqual(server.SUPPORTED_DISTROS, ["jazzy", "lyrical", "rolling"])
+        self.assertNotIn("humble", server.SUPPORTED_DISTROS)  # dropped upstream
 
     def test_nav2_config_endpoints(self):
-        for distro in ["jazzy", "lyrical", "rolling", "humble"]:
+        for distro in server.SUPPORTED_DISTROS:
             cfg = server.get_nav2_config(distro)
             self.assertTrue(len(cfg) > 0, f"Empty config for {distro}")
             self.assertIn("ros__parameters", cfg, f"ros__parameters not in {distro} config")
-            if distro == "humble":
-                self.assertIn("recoveries_server", cfg)
-            else:
-                self.assertIn("behavior_server", cfg)
+            self.assertIn("behavior_server", cfg)
 
         orig_jazzy = server.get_nav2_config("jazzy")
         test_content = "# custom test nav2 parameters\nros__parameters:\n  footprint: '[[0.25, 0.25], [-0.25, 0.25]]'\n"
@@ -261,7 +258,7 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertNotIn("'depth_costmap':", cons_src)
 
     def test_shipped_nav_templates_have_gated_pointcloud(self):
-        """Jazzy+ templates ship with the depth pointcloud source + block (like humble)."""
+        """Templates ship the depth pointcloud source + block for every supported distro."""
         cfg_dir = os.path.join(os.path.dirname(__file__), "config")
         for distro in ("jazzy", "lyrical", "rolling"):
             for suffix in ("", "_mecanum"):

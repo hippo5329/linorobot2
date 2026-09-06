@@ -37,7 +37,7 @@ WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(WEB_DIR, "console_config.json")
 CONFIG_DIR = os.path.join(os.path.dirname(WEB_DIR), "config")
 LINOROBOT2_ROOT = os.path.abspath(os.path.join(WEB_DIR, "../../.."))
-SUPPORTED_DISTROS = ["jazzy", "lyrical", "rolling", "humble"]
+SUPPORTED_DISTROS = ["jazzy", "lyrical", "rolling"]  # Humble dropped upstream (linorobot)
 NAV2_CONFIG_PATH = os.path.join(WEB_DIR, "console_nav2_jazzy.yaml")
 
 
@@ -958,7 +958,7 @@ def detect_ros_distro():
     if env_distro in SUPPORTED_DISTROS:
         return env_distro
 
-    for d in ["jazzy", "lyrical", "rolling", "humble"]:
+    for d in SUPPORTED_DISTROS:
         if os.path.isdir(f"/opt/ros/{d}"):
             return d
 
@@ -969,8 +969,6 @@ def detect_ros_distro():
                 return "jazzy"
             if "resolute" in c or "26.04" in c:
                 return "lyrical"
-            if "jammy" in c or "22.04" in c:
-                return "humble"
     except Exception:
         pass
 

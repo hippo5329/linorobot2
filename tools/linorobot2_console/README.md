@@ -40,13 +40,13 @@ dependencies -- just the Python 3 standard library, same as config-engine.
   background (via modular `launch_bringup.py`), waits for nodes and micro-ROS agent to
   initialize, and seamlessly launches the requested action in the `main` slot.
 - **Multi-Distro ROS 2 Support** -- Full operational support for **Jazzy**, **Lyrical**,
-  **Rolling**, and **Humble**. A live distribution selector in the header dynamically
+  and **Rolling**. A live distribution selector in the header dynamically
   adapts environment variables (`$ROS_DISTRO`), APT package names, Git branch fallbacks
   (`$ROS_DISTRO` -> `main` -> `jazzy`), and micro-ROS agent container tags.
 - **Per-Distro Nav2 Parameter Studio & Python Launcher** -- Console provides an in-browser
   YAML parameter editor with dedicated configuration templates for each distribution:
   `nav2_jazzy.yaml`, `nav2_lyrical.yaml`, `nav2_rolling.yaml` (using modern `behavior_server`
-  and `smoother_server`), and `nav2_humble.yaml` (using `recoveries_server`). It uses our own
+  and `smoother_server`). It uses our own
   modular `launch_nav2.py` Python launcher to provide fully configurable `params_file`, `map`,
   and `sim` arguments without being locked into hardcoded upstream launch parameters.
 - **Teleop / SLAM / Navigation / magnetometer calibration** -- One-click actions with

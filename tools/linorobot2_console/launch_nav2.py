@@ -138,7 +138,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             name='distro',
             default_value=os.environ.get('ROS_DISTRO', 'jazzy'),
-            description='ROS 2 distribution (jazzy, lyrical, rolling, humble)'
+            description='ROS 2 distribution (jazzy, lyrical, rolling)'
         ),
         DeclareLaunchArgument(
             name='base',

@@ -464,7 +464,7 @@ def patch_slam_text(text, resolution=None, max_laser_range=None,
 
 
 # Costmap layers carry `observation_sources: scan pointcloud` in the jazzy+
-# templates (matching humble). The depth `pointcloud:` block is always defined
+# templates. The depth `pointcloud:` block is always defined
 # but is inert unless listed here -- so toggling this one token is how the
 # console gates the depth camera in/out of the costmap on the selected robot.
 _OBS_SCAN_ONLY = re.compile(r'(?m)^([ \t]*observation_sources:[ \t]*)scan[ \t]*$')

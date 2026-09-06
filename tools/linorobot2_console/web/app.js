@@ -150,7 +150,6 @@ function envPrefix() {
          `if [ -f /opt/ros/${distro}/setup.bash ]; then source /opt/ros/${distro}/setup.bash 2>/dev/null || true; ` +
          `elif [ -f /opt/ros/jazzy/setup.bash ]; then source /opt/ros/jazzy/setup.bash 2>/dev/null || true; ` +
          `elif [ -f /opt/ros/rolling/setup.bash ]; then source /opt/ros/rolling/setup.bash 2>/dev/null || true; ` +
-         `elif [ -f /opt/ros/humble/setup.bash ]; then source /opt/ros/humble/setup.bash 2>/dev/null || true; ` +
          `fi; ` +
          `[ -f ${ws}/install/setup.bash ] && source ${ws}/install/setup.bash 2>/dev/null || true; `;
 }

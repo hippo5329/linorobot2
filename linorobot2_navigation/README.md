@@ -1,22 +1,22 @@
 # Nav2 Customization & Tuning Guide
 *(Synthesized from the Official Nav2 Documentation: First-Time Robot Setup Guide, Nav2 Tuning Guide & Plugin Customization Guides)*
 
-This guide details the complete customization and parameter tuning architecture for **Navigation 2 (Nav2)**, **SLAM Toolbox**, and **robot_localization (EKF)** on Linorobot2 mobile robots across all supported ROS 2 distributions (**Jazzy**, **Lyrical**, **Rolling**, and **Humble**).
+This guide details the complete customization and parameter tuning architecture for **Navigation 2 (Nav2)**, **SLAM Toolbox**, and **robot_localization (EKF)** on Linorobot2 mobile robots across the supported ROS 2 distributions (**Jazzy**, **Lyrical**, **Rolling**). *(Humble was dropped following the upstream linorobot decision.)*
 
 ---
 
-## 1. Nav2 System Architecture & Multi-Distro Parity
+## 1. Nav2 System Architecture
 
-Nav2 relies on a managed lifecycle state machine (Unconfigured -> Inactive -> Active) and modular `pluginlib` components. Across ROS 2 distributions, Nav2 has evolved:
+Nav2 relies on a managed lifecycle state machine (Unconfigured -> Inactive -> Active) and modular `pluginlib` components. On Jazzy / Lyrical / Rolling the stack is:
 
-| Subsystem / Feature | ROS 2 Jazzy (24.04) / Lyrical (26.04) / Rolling | ROS 2 Humble (22.04 LTS) |
-| :--- | :--- | :--- |
-| **Recovery Engine** | `behavior_server` (Spin, BackUp, DriveOnHeading, AssistedTeleop) | `recoveries_server` (Spin, BackUp, Wait) |
-| **Path Follower** | `RegulatedPurePursuitController` with `RotationShimController` | `DWBLocalPlanner` with `RotationShimController` |
-| **Path Smoothing** | `smoother_server` (SimpleSmoother) | Custom planner smoothing |
-| **Charging & Docking**| `docking_server` (SimpleChargingDock) | External docking node |
-| **Velocity Limiter** | `nav2_velocity_smoother::VelocitySmoother` | `velocity_smoother` node |
-| **Behavior Trees** | BehaviorTree.CPP v4 (`NavigateToPose`, `NavigateThroughPoses`) | BehaviorTree.CPP v3 legacy nodes |
+| Subsystem / Feature | Component (Jazzy / Lyrical / Rolling) |
+| :--- | :--- |
+| **Recovery Engine** | `behavior_server` (Spin, BackUp, DriveOnHeading, AssistedTeleop) |
+| **Path Follower** | `RegulatedPurePursuitController` with `RotationShimController` |
+| **Path Smoothing** | `smoother_server` (SimpleSmoother) |
+| **Charging & Docking**| `docking_server` (SimpleChargingDock) |
+| **Velocity Limiter** | `nav2_velocity_smoother::VelocitySmoother` |
+| **Behavior Trees** | BehaviorTree.CPP v4 (`NavigateToPose`, `NavigateThroughPoses`) |
 
 Linorobot2 maintains validated per-distro configurations in:
 - `linorobot2_navigation/config/navigation_<distro>.yaml` (Differential 2WD/4WD)
@@ -119,7 +119,7 @@ Cost ^
 
 ---
 
-## 4. Path Tracking & Oscillation Damping (RPP & DWB)
+## 4. Path Tracking & Oscillation Damping
 
 ### 4.1 Regulated Pure Pursuit Controller (Jazzy / Lyrical / Rolling)
 The official Nav2 documentation recommends RPP for robust path tracking with velocity regulation:
@@ -134,11 +134,6 @@ The official Nav2 documentation recommends RPP for robust path tracking with vel
   2. Reduce `max_angular_accel` from 3.2 down to `2.2` rad/s².
   3. Increase `general_goal_checker` `yaw_goal_tolerance` to `0.15` rad (~8.5°).
 
-### 4.2 DWB Local Planner (Humble)
-In ROS 2 Humble:
-- Set `min_vel_x: 0.0`, `max_vel_x: 0.4` m/s.
-- For differential drive: `max_vel_y: 0.0`, `vy_samples: 1`.
-- For mecanum drive: `max_vel_y: 0.4` m/s, `vy_samples: 20` (enables lateral trajectory rollout evaluation).
 
 ---
 
@@ -164,12 +159,11 @@ ros2 launch linorobot2_navigation navigation.launch.py \
 ### 5.5 Diagnostic Troubleshooting Matrix: Drift, Overshoot, Destination Reachability & In-Place Rotation
 
 | Symptom / Failure Mode | Physical & Algorithmic Root Cause | Prescribed Parameter & System Fix |
-| :--- | :--- | :--- |
-| **State Estimation Drift** *(Sideways wandering, in-place spin displacement)* | For 2WD/4WD robots, wheel slip during spins publishes noisy $v_y$ in `/odom/unfiltered`. If fused, EKF integrates this as permanent lateral displacement. Low update rate (<20 Hz) causes numerical integration errors. | 1. Set EKF `odom0_config` $v_y = \text{false}$ for differential drive.<br>2. Standardize EKF `frequency: 50.0` (matching micro-ROS).<br>3. Enforce `two_d_mode: true`.<br>4. In `controller_server`, set `min_y_velocity_threshold: 0.5`. |
-| **Goal Overshoot** *(Blowing past destination, late braking, corner overshoot)* | Loose deceleration limits in `velocity_smoother` (e.g. $-1.0\,\text{m/s}^2$) leave robot with excessive kinetic energy. Approach velocity scaling disabled or lookahead distance too long near goal. | 1. Stiffen braking authority in `velocity_smoother`: `max_decel: [-2.8, 0.0, -3.5]`.<br>2. Enable approach scaling: `approach_velocity_scaling_dist: 0.75m`, `min_approach_linear_velocity: 0.05m/s`.<br>3. Shorten lookahead near goal: `lookahead_dist: 0.45m`. |
-| **Unable to Reach Destination** *(Stops short, tolerance timeout, goal abort)* | Overly strict goal tolerances (<5cm) when mechanical encoder backlash or deadband is 3-4cm; progress checker triggers timeout; or goal pose is placed inside obstacle inflation halo ($cost > 200$). | 1. Expand goal tolerances: `xy_goal_tolerance: 0.08m` (8cm), `yaw_goal_tolerance: 0.12rad` (~7°).<br>2. Increase progress allowance: `movement_time_allowance: 15.0s`, `required_movement_radius: 0.15m`.<br>3. Steepen inflation falloff: `inflation_radius: 0.52m`, `cost_scaling_factor: 5.5`. |
-| **In-Place Rotation Instability** *(Oscillation at goal, wide banana-arc turns, motor shudder)* | Abrupt angular acceleration (>3.0 rad/s²) breaks wheel traction. Missing rotation shim causes controller to trace wide curves instead of turning on the spot. Strict yaw tolerance causes continuous "hunting" oscillation. | 1. Smooth angular acceleration: `max_angular_accel: 2.0 rad/s²`.<br>2. Tune `RotationShimController`: `angular_dist_threshold: 0.785 rad` (45°), `rotate_to_heading_angular_vel: 1.5 rad/s`.<br>3. Enable `rotate_to_heading_once: true`.<br>4. Expand `yaw_goal_tolerance: 0.12 rad`. |
-
+| :--- | :--- |
+| **State Estimation Drift** *(Sideways wandering, in-place spin displacement)* | For 2WD/4WD robots, wheel slip during spins publishes noisy $v_y$ in `/odom/unfiltered`. If fused, EKF integrates this as permanent lateral displacement. Low update rate (<20 Hz) causes numerical integration errors. |
+| **Goal Overshoot** *(Blowing past destination, late braking, corner overshoot)* | Loose deceleration limits in `velocity_smoother` (e.g. $-1.0\,\text{m/s}^2$) leave robot with excessive kinetic energy. Approach velocity scaling disabled or lookahead distance too long near goal. |
+| **Unable to Reach Destination** *(Stops short, tolerance timeout, goal abort)* | Overly strict goal tolerances (<5cm) when mechanical encoder backlash or deadband is 3-4cm; progress checker triggers timeout; or goal pose is placed inside obstacle inflation halo ($cost > 200$). |
+| **In-Place Rotation Instability** *(Oscillation at goal, wide banana-arc turns, motor shudder)* | Abrupt angular acceleration (>3.0 rad/s²) breaks wheel traction. Missing rotation shim causes controller to trace wide curves instead of turning on the spot. Strict yaw tolerance causes continuous "hunting" oscillation. |
 ---
 
 ## 6. Automated Patcher Tool (`patcher.py`)

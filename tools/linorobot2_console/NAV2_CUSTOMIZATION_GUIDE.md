@@ -1,22 +1,22 @@
 # Nav2 Customization & Tuning Guide
 *(Synthesized from the Official Nav2 Documentation: First-Time Robot Setup Guide, Nav2 Tuning Guide & Plugin Customization Guides)*
 
-This guide details the complete customization and parameter tuning architecture for **Navigation 2 (Nav2)**, **SLAM Toolbox**, and **robot_localization (EKF)** on Linorobot2 mobile robots across all supported ROS 2 distributions (**Jazzy**, **Lyrical**, **Rolling**, and **Humble**).
+This guide details the complete customization and parameter tuning architecture for **Navigation 2 (Nav2)**, **SLAM Toolbox**, and **robot_localization (EKF)** on Linorobot2 mobile robots across the supported ROS 2 distributions (**Jazzy**, **Lyrical**, **Rolling**). *(Humble was dropped following the upstream linorobot decision.)*
 
 ---
 
-## 1. Nav2 System Architecture & Multi-Distro Parity
+## 1. Nav2 System Architecture
 
-Nav2 relies on a managed lifecycle state machine (Unconfigured -> Inactive -> Active) and modular `pluginlib` components. Across ROS 2 distributions, Nav2 has evolved:
+Nav2 relies on a managed lifecycle state machine (Unconfigured -> Inactive -> Active) and modular `pluginlib` components. On Jazzy / Lyrical / Rolling the stack is:
 
-| Subsystem / Feature | ROS 2 Jazzy (24.04) / Lyrical (26.04) / Rolling | ROS 2 Humble (22.04 LTS) |
-| :--- | :--- | :--- |
-| **Recovery Engine** | `behavior_server` (Spin, BackUp, DriveOnHeading, AssistedTeleop) | `recoveries_server` (Spin, BackUp, Wait) |
-| **Path Follower** | `RegulatedPurePursuitController` with `RotationShimController` | `DWBLocalPlanner` with `RotationShimController` |
-| **Path Smoothing** | `smoother_server` (SimpleSmoother) | Custom planner smoothing |
-| **Charging & Docking**| `docking_server` (SimpleChargingDock) | External docking node |
-| **Velocity Limiter** | `nav2_velocity_smoother::VelocitySmoother` | `velocity_smoother` node |
-| **Behavior Trees** | BehaviorTree.CPP v4 (`NavigateToPose`, `NavigateThroughPoses`) | BehaviorTree.CPP v3 legacy nodes |
+| Subsystem / Feature | Component |
+| :--- | :--- |
+| **Recovery Engine** | `behavior_server` (Spin, BackUp, DriveOnHeading, AssistedTeleop) |
+| **Path Follower** | `RegulatedPurePursuitController` with `RotationShimController` |
+| **Path Smoothing** | `smoother_server` (SimpleSmoother) |
+| **Charging & Docking** | `docking_server` (SimpleChargingDock) |
+| **Velocity Limiter** | `nav2_velocity_smoother::VelocitySmoother` |
+| **Behavior Trees** | BehaviorTree.CPP v4 (`NavigateToPose`, `NavigateThroughPoses`) |
 
 Linorobot2 maintains validated per-distro configurations in:
 - `linorobot2_navigation/config/navigation_<distro>.yaml` (Differential 2WD/4WD)
@@ -162,7 +162,7 @@ patcher.costmap_depth_active(text)                          # -> bool
 
 ---
 
-## 4. Path Tracking & Oscillation Damping (RPP & DWB)
+## 4. Path Tracking & Oscillation Damping
 
 ### 4.1 Regulated Pure Pursuit Controller (Jazzy / Lyrical / Rolling)
 The official Nav2 documentation recommends RPP for robust path tracking with velocity regulation:
@@ -176,12 +176,6 @@ The official Nav2 documentation recommends RPP for robust path tracking with vel
   1. Reduce `rotate_to_heading_angular_vel` from 1.8 down to `1.2` rad/s.
   2. Reduce `max_angular_accel` from 3.2 down to `2.2` rad/s².
   3. Increase `general_goal_checker` `yaw_goal_tolerance` to `0.15` rad (~8.5°).
-
-### 4.2 DWB Local Planner (Humble)
-In ROS 2 Humble:
-- Set `min_vel_x: 0.0`, `max_vel_x: 0.4` m/s.
-- For differential drive: `max_vel_y: 0.0`, `vy_samples: 1`.
-- For mecanum drive: `max_vel_y: 0.4` m/s, `vy_samples: 20` (enables lateral trajectory rollout evaluation).
 
 ---
 

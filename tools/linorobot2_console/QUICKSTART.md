@@ -11,12 +11,11 @@ Linorobot2 Console is a lightweight, zero-dependency browser studio for the robo
    - If Bringup is down, Console automatically starts Bringup in a dedicated background slot (`bringup`), waits for ROS 2 nodes and micro-ROS agent to initialize, and seamlessly launches your requested action in the `main` slot.
    - Bringup and higher-level tasks run concurrently without process conflicts.
 2. **Multi-Distro ROS 2 Support**:
-   - Full support for **Jazzy Jalisco** (Ubuntu 24.04 LTS), **Lyrical Resolute** (Ubuntu 26.04), **Rolling Ridley**, and **Humble Hawksbill** (Ubuntu 22.04).
+   - Full support for **Jazzy Jalisco** (Ubuntu 24.04 LTS), **Lyrical Resolute** (Ubuntu 26.04), and **Rolling Ridley**. (Humble was dropped upstream.)
    - One-click distribution selector in the header dynamically adapts environment variables, APT package names, Git branch fallbacks (`$ROS_DISTRO` &rarr; `main` &rarr; `jazzy`), and container image tags.
 3. **Per-Distro Nav2 Parameter Studio**:
    - In-browser YAML parameter editor with dedicated configuration templates for each distro:
      - `nav2_jazzy.yaml` / `nav2_lyrical.yaml` / `nav2_rolling.yaml`: Modern `behavior_server`, `smoother_server`, and dynamic BT navigators.
-     - `nav2_humble.yaml`: Classic `recoveries_server` and Humble lifecycle nodes.
    - Save custom robot footprints, planner tolerances, and costmap inflation radiuses directly in the web UI.
 4. **Dedicated Python Launchers**:
    - `launch_nav2.py`: Overcomes upstream hardcoded parameter limitations by declaring configurable `params_file`, `map`, `distro`, and `sim` arguments.
@@ -45,7 +44,7 @@ Open **`http://localhost:8090/`** (or `http://<robot-ip>:8090/` from any compute
 
 ### 2. Header Status & Distribution Selection
 At the top of every tab, the Console header displays real-time status:
-- **ROS Distro**: Selectable dropdown (`jazzy`, `lyrical`, `rolling`, `humble`). Changing the dropdown updates the active environment instantly.
+- **ROS Distro**: Selectable dropdown (`jazzy`, `lyrical`, `rolling`). Changing the dropdown updates the active environment instantly.
 - **Workspace**: Shows whether `install/setup.bash` is built.
 - **Bringup Pill**: Dynamically shows `down`, `starting...`, or `running`.
 - **Agent Pill**: Shows micro-ROS agent connection status.
@@ -108,8 +107,7 @@ tools/linorobot2_console/
 ├── config/                        # Reference distro Nav2 templates
 │   ├── nav2_jazzy.yaml            # Jazzy Nav2 configuration (behavior_server)
 │   ├── nav2_lyrical.yaml          # Lyrical Nav2 configuration
-│   ├── nav2_rolling.yaml          # Rolling Nav2 configuration
-│   └── nav2_humble.yaml           # Humble Nav2 configuration (recoveries_server)
+│   └── nav2_rolling.yaml          # Rolling Nav2 configuration
 └── web/                           # Zero-dependency web UI studio
     ├── server.py                  # Python SSE multi-runner HTTP backend
     ├── index.html                 # Console frontend layout
@@ -118,6 +116,5 @@ tools/linorobot2_console/
     ├── console_config.json        # User workspace & distro preferences
     ├── console_nav2_jazzy.yaml    # Active editable Jazzy parameters
     ├── console_nav2_lyrical.yaml  # Active editable Lyrical parameters
-    ├── console_nav2_rolling.yaml  # Active editable Rolling parameters
-    └── console_nav2_humble.yaml   # Active editable Humble parameters
+    └── console_nav2_rolling.yaml  # Active editable Rolling parameters
 ```
