@@ -117,6 +117,59 @@ class TestLinorobot2Console(unittest.TestCase):
             if sensor["udev"] is not None:
                 self.assertIsInstance(sensor["udev"], list)
 
+    def test_sensor_registry_is_single_source(self):
+        """/api/sensors payload carries everything the frontend needs -- no client-side copies."""
+        reg = server.sensor_registry()
+        self.assertEqual(set(reg["laser"]), set(server.LASER_SENSORS))
+        ld = reg["laser"]["ldlidar"]
+        self.assertTrue(ld["serial"])
+        self.assertEqual(ld["symlink"], "/dev/ldlidar")
+        self.assertEqual(ld["docker_key"], "ldlidar")
+        self.assertEqual([m["code"] for m in ld["models"]], ["ld06", "ld19", "stl27l"])
+        self.assertTrue(all("product" in m for m in ld["models"]))
+        # sllidar's one install covers seven bringup model codes
+        self.assertEqual(len(reg["laser"]["sllidar"]["models"]), 7)
+        # depth cameras are not serial-port devices
+        self.assertFalse(reg["depth"]["realsense"]["serial"])
+
+    def test_build_sensor_install_cmd(self):
+        c = server.build_sensor_install_cmd("laser", "ldlidar", skip_udev=True, ws="/w")
+        self.assertEqual(
+            c,
+            "cd /w && [ -d src/ldlidar_stl_ros2 ] || git clone "
+            "https://github.com/hippo5329/ldlidar_stl_ros2.git src/ldlidar_stl_ros2 "
+            "&& colcon build",
+        )
+        # udev appended when not skipped
+        self.assertIn("udevadm control", server.build_sensor_install_cmd("laser", "ldlidar", ws="/w"))
+        # udev_only drops the build steps
+        only = server.build_sensor_install_cmd("laser", "sllidar", udev_only=True, ws="/w")
+        self.assertIn("rplidar.rules", only)
+        self.assertNotIn("colcon build", only)
+        # {ws} substitution
+        self.assertIn("/w/src/sllidar_ros2", only)
+        # unknown / no-command sensor
+        self.assertIsNone(server.build_sensor_install_cmd("depth", "zed"))
+        self.assertIsNone(server.build_sensor_install_cmd("laser", "nope"))
+
+    def test_to_by_path_is_idempotent_and_safe(self):
+        # an already-stable path is returned unchanged
+        p = "/dev/serial/by-path/pci-0000:00-usb-0:1:1.0-port0"
+        self.assertEqual(server.to_by_path(p), p)
+        self.assertEqual(server.to_by_path("/dev/serial/by-id/usb-Foo-if00"), "/dev/serial/by-id/usb-Foo-if00")
+        # a device with no by-path mapping falls back to itself
+        self.assertEqual(server.to_by_path("/dev/nonexistent-tty"), "/dev/nonexistent-tty")
+        self.assertEqual(server.to_by_path(""), "")
+
+    def test_list_serial_ports_shape(self):
+        ports = server.list_serial_ports()
+        self.assertIsInstance(ports, list)
+        for p in ports:
+            for k in ("preferred", "by_path", "by_id", "tty", "usb_id", "vendor", "model", "serial"):
+                self.assertIn(k, p)
+            self.assertTrue(p["preferred"])
+            self.assertTrue(p["tty"].startswith("/dev/tty"))
+
     def test_upstream_github_issues_diagnostics(self):
         """Test AI diagnosis and patches for common upstream GitHub issues (#113, #37, #76, #12)."""
         from server import analyze_robotics_ai

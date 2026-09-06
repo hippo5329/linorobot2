@@ -374,14 +374,46 @@ DEFAULT_CONFIG = {
     "agent_device": "/dev/ttyACM0",
     "agent_port": "8888",
     "agent_baud": "921600",
+    # Sensor serial ports -- stored as /dev/serial/by-path/... so they survive
+    # replug and reboot (unlike /dev/ttyUSBn, and unlike /dev/serial/by-id
+    # which many cheap CP2102 lidars can't populate). Blank = fall back to the
+    # driver's own persistent udev symlink.
+    "laser_serial_port": "",
+    "laser_baud": "",
+    "depth_serial_port": "",
 }
 
-# Per-sensor install/udev commands, ported from linorobot2's install.bash
-# (kept here as plain data, not by sourcing/invoking that script -- see the
-# implementation plan for why). Each list is run as one `&&`-joined command.
+# ============================================================================
+# Sensor registry -- the ONE source of truth for laser + depth sensors.
+#
+# Everything the frontend needs to build a dropdown, an install command, a
+# bringup env var, a docker/.env line or a direct `ros2 run` invocation lives
+# here. The browser fetches this whole structure once from /api/sensors and no
+# longer keeps its own parallel copies. Install/udev command lists are ported
+# from linorobot2's install.bash (kept as plain data, not sourced) and run as
+# one `&&`-joined string via /api/sensor_install_cmd.
+#
+# Per-entry keys:
+#   label          human label for the driver package
+#   install/udev   command lists ({ws} -> workspace path); udev None = no rule
+#   serial         True if it's a serial device with a user-selectable port
+#   symlink        persistent /dev/<name> udev symlink this driver's rules make
+#   default_baud   baud used when the UI field is left blank
+#   docker_key     value for docker/.env LASER_SENSOR=/DEPTH_SENSOR= (None = n/a)
+#   models         bringup `sensor:=` / LINOROBOT2_*_SENSOR codes this driver
+#                  covers, each: {code, label, [product, bins, baud]}.
+#                  product/bins/baud present => driver via `ros2 run
+#                  ldlidar_stl_ros2` with a fully configurable port; absent =>
+#                  delegated to linorobot2_bringup/launch/lasers.launch.py.
+# ============================================================================
 LASER_SENSORS = {
     "ydlidar": {
         "label": "YDLIDAR",
+        "serial": True,
+        "symlink": "/dev/ydlidar",
+        "default_baud": "128000",
+        "docker_key": "ydlidar",
+        "models": [{"code": "ydlidar", "label": "YDLIDAR X4 / G4 / others"}],
         "install": [
             "cd /tmp",
             "rm -rf YDLidar-SDK",
@@ -403,6 +435,11 @@ LASER_SENSORS = {
     },
     "xv11": {
         "label": "XV11",
+        "serial": True,
+        "symlink": None,
+        "default_baud": "115200",
+        "docker_key": "xv11",
+        "models": [{"code": "xv11", "label": "Neato XV11"}],
         "install": [
             "cd {ws}",
             "[ -d src/xv_11_driver ] || git clone https://github.com/mjstn/xv_11_driver src/xv_11_driver",
@@ -411,7 +448,16 @@ LASER_SENSORS = {
         "udev": None,
     },
     "ldlidar": {
-        "label": "LD06 / LD19 / STL27L",
+        "label": "LDROBOT (LD06 / LD19 / STL27L)",
+        "serial": True,
+        "symlink": "/dev/ldlidar",
+        "default_baud": "230400",
+        "docker_key": "ldlidar",
+        "models": [
+            {"code": "ld06", "label": "LD06", "product": "LDLiDAR_LD06", "bins": 456, "baud": "230400"},
+            {"code": "ld19", "label": "LD19", "product": "LDLiDAR_LD19", "bins": 456, "baud": "230400"},
+            {"code": "stl27l", "label": "STL27L", "product": "LDLiDAR_STL27L", "bins": 2160, "baud": "921600"},
+        ],
         "install": [
             "cd {ws}",
             "[ -d src/ldlidar_stl_ros2 ] || git clone https://github.com/hippo5329/ldlidar_stl_ros2.git src/ldlidar_stl_ros2",
@@ -425,6 +471,19 @@ LASER_SENSORS = {
     },
     "sllidar": {
         "label": "RPLIDAR (A1/A2/A3/C1/S1/S2/S3)",
+        "serial": True,
+        "symlink": "/dev/rplidar",
+        "default_baud": "115200",
+        "docker_key": "rplidar",
+        "models": [
+            {"code": "a1", "label": "RPLIDAR A1"},
+            {"code": "a2", "label": "RPLIDAR A2"},
+            {"code": "a3", "label": "RPLIDAR A3"},
+            {"code": "c1", "label": "RPLIDAR C1"},
+            {"code": "s1", "label": "RPLIDAR S1"},
+            {"code": "s2", "label": "RPLIDAR S2"},
+            {"code": "s3", "label": "RPLIDAR S3"},
+        ],
         "install": [
             "cd {ws}",
             "[ -d src/sllidar_ros2 ] || git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2",
@@ -440,6 +499,10 @@ LASER_SENSORS = {
 DEPTH_SENSORS = {
     "realsense": {
         "label": "Intel RealSense",
+        "serial": False,
+        "symlink": None,
+        "docker_key": "realsense",
+        "models": [{"code": "realsense", "label": "RealSense D4xx"}],
         "install": ["sudo apt-get install -y ros-$ROS_DISTRO-realsense2-camera"],
         "udev": [
             "cd /tmp && wget -q https://raw.githubusercontent.com/IntelRealSense/librealsense/master/config/99-realsense-libusb.rules",
@@ -449,6 +512,14 @@ DEPTH_SENSORS = {
     },
     "oakd": {
         "label": "Luxonis OAK-D / Lite / Pro",
+        "serial": False,
+        "symlink": None,
+        "docker_key": None,
+        "models": [
+            {"code": "oakd", "label": "OAK-D"},
+            {"code": "oakdlite", "label": "OAK-D Lite"},
+            {"code": "oakdpro", "label": "OAK-D Pro"},
+        ],
         "install": ["sudo apt-get install -y ros-$ROS_DISTRO-depthai-ros"],
         "udev": [
             'echo \'SUBSYSTEM=="usb", ATTRS{{idVendor}}=="03e7", MODE="0666"\' | sudo tee /etc/udev/rules.d/80-movidius.rules',
@@ -457,6 +528,10 @@ DEPTH_SENSORS = {
     },
     "astra": {
         "label": "Orbbec Astra",
+        "serial": False,
+        "symlink": None,
+        "docker_key": None,
+        "models": [{"code": "astra", "label": "Orbbec Astra"}],
         "install": [
             "sudo apt-get install -y libuvc-dev libopenni2-dev",
             "cd {ws}",
@@ -468,7 +543,160 @@ DEPTH_SENSORS = {
             "sudo udevadm control --reload-rules && sudo udevadm trigger",
         ],
     },
+    "zed": {
+        "label": "Stereolabs ZED (SDK-managed)",
+        "serial": False,
+        "symlink": None,
+        "docker_key": "zed",
+        "models": [
+            {"code": "zed", "label": "ZED"},
+            {"code": "zedm", "label": "ZED Mini"},
+            {"code": "zed2", "label": "ZED 2"},
+            {"code": "zed2i", "label": "ZED 2i"},
+        ],
+        # ZED needs the proprietary SDK + zed-ros2-wrapper; not scripted here.
+        "install": None,
+        "udev": None,
+    },
 }
+
+
+def _sensor_table(kind):
+    return LASER_SENSORS if kind == "laser" else DEPTH_SENSORS
+
+
+def sensor_registry():
+    """The full sensor registry the browser builds every sensor dropdown from.
+
+    Command lists are included so the client no longer keeps its own copy;
+    it still displays them, but assembly happens in build_sensor_install_cmd.
+    """
+    def entries(table):
+        out = {}
+        for key, e in table.items():
+            out[key] = {
+                "label": e["label"],
+                "serial": e.get("serial", False),
+                "symlink": e.get("symlink"),
+                "default_baud": e.get("default_baud"),
+                "docker_key": e.get("docker_key"),
+                "models": e.get("models", []),
+                "has_install": bool(e.get("install")),
+                "has_udev": bool(e.get("udev")),
+            }
+        return out
+    return {"laser": entries(LASER_SENSORS), "depth": entries(DEPTH_SENSORS)}
+
+
+def build_sensor_install_cmd(kind, key, skip_udev=False, udev_only=False, ws=None):
+    """Join a sensor's install (and/or udev) steps into one `&&` command string."""
+    entry = _sensor_table(kind).get(key)
+    if not entry:
+        return None
+    ws = ws or os.path.expanduser("~/linorobot2_ws")
+    steps = []
+    if not udev_only and entry.get("install"):
+        steps += list(entry["install"])
+    if (udev_only or not skip_udev) and entry.get("udev"):
+        steps += list(entry["udev"])
+    if not steps:
+        return None
+    return " && ".join(s.replace("{ws}", ws) for s in steps)
+
+
+_TTY_RE = re.compile(r"^tty(USB|ACM)\d+$")
+
+
+def _udev_usb_props(dev):
+    """idVendor:idProduct + vendor/model/serial strings for a /dev/tty* node."""
+    try:
+        out = subprocess.run(
+            ["udevadm", "info", "--query=property", "--name", dev],
+            capture_output=True, text=True, timeout=4,
+        ).stdout
+    except Exception:
+        return {}
+    props = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            props[k] = v
+    vid = props.get("ID_VENDOR_ID", "")
+    pid = props.get("ID_MODEL_ID", "")
+    return {
+        "usb_id": f"{vid}:{pid}" if vid and pid else "",
+        "vendor": props.get("ID_VENDOR_FROM_DATABASE") or props.get("ID_VENDOR", ""),
+        "model": props.get("ID_MODEL_FROM_DATABASE") or props.get("ID_MODEL", ""),
+        "serial": props.get("ID_SERIAL_SHORT", ""),
+        "driver": props.get("ID_USB_DRIVER", ""),
+    }
+
+
+def _by_path_for(tty_dev):
+    """The /dev/serial/by-path/<x> symlink that resolves to tty_dev, if any."""
+    d = "/dev/serial/by-path"
+    if not os.path.isdir(d):
+        return None
+    for name in os.listdir(d):
+        link = os.path.join(d, name)
+        try:
+            if os.path.realpath(link) == os.path.realpath(tty_dev):
+                return link
+        except OSError:
+            continue
+    return None
+
+
+def to_by_path(dev):
+    """Normalize a serial device to its stable /dev/serial/by-path/ form.
+
+    A by-path or by-id path is returned unchanged. A raw /dev/ttyUSBn is
+    resolved to its by-path symlink when one exists, else returned as given.
+    """
+    if not dev:
+        return dev
+    if dev.startswith(("/dev/serial/by-path/", "/dev/serial/by-id/")):
+        return dev
+    return _by_path_for(dev) or dev
+
+
+def list_serial_ports():
+    """Serial devices present now, each with its stable path + USB identity."""
+    seen = {}  # realpath -> record
+
+    def add(path, kind):
+        try:
+            real = os.path.realpath(path)
+        except OSError:
+            return
+        if not _TTY_RE.match(os.path.basename(real)):
+            return
+        rec = seen.setdefault(real, {"tty": real, "by_path": None, "by_id": None})
+        if kind == "by-path":
+            rec["by_path"] = path
+        elif kind == "by-id":
+            rec["by_id"] = path
+
+    for base, kind in (("/dev/serial/by-path", "by-path"), ("/dev/serial/by-id", "by-id")):
+        if os.path.isdir(base):
+            for name in sorted(os.listdir(base)):
+                add(os.path.join(base, name), kind)
+    for name in sorted(os.listdir("/dev")):
+        if _TTY_RE.match(name):
+            add(os.path.join("/dev", name), "tty")
+
+    ports = []
+    for real, rec in sorted(seen.items()):
+        props = _udev_usb_props(real)
+        ports.append({
+            # preferred = the most stable path available for this device
+            "preferred": rec["by_path"] or rec["by_id"] or rec["tty"],
+            "by_path": rec["by_path"],
+            "by_id": rec["by_id"],
+            "tty": rec["tty"],
+            **props,
+        })
+    return ports
 
 
 def load_config():
@@ -902,10 +1130,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/sensors":
-            self._send_json({
-                "laser": {k: v["label"] for k, v in LASER_SENSORS.items()},
-                "depth": {k: v["label"] for k, v in DEPTH_SENSORS.items()},
-            })
+            self._send_json(sensor_registry())
+            return
+
+        if path == "/api/serial_ports":
+            self._send_json({"ports": list_serial_ports()})
             return
 
         if path == "/api/nav2_config":
@@ -1085,9 +1314,29 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/config":
             cfg = load_config()
-            cfg.update({k: v for k, v in data.items() if k in DEFAULT_CONFIG})
+            incoming = {k: v for k, v in data.items() if k in DEFAULT_CONFIG}
+            # Persist sensor ports in their stable by-path form.
+            for k in ("laser_serial_port", "depth_serial_port"):
+                if incoming.get(k):
+                    incoming[k] = to_by_path(incoming[k])
+            cfg.update(incoming)
             save_config(cfg)
             self._send_json(cfg)
+            return
+
+        if path == "/api/sensor_install_cmd":
+            kind = data.get("kind", "laser")
+            key = data.get("key", "")
+            cmd = build_sensor_install_cmd(
+                kind, key,
+                skip_udev=bool(data.get("skip_udev")),
+                udev_only=bool(data.get("udev_only")),
+                ws=data.get("workspace_path") or load_config()["workspace_path"],
+            )
+            if cmd is None:
+                self._send_json({"error": f"no commands for {kind}:{key}"}, 404)
+            else:
+                self._send_json({"command": cmd})
             return
 
         if path == "/api/exec":

@@ -237,48 +237,99 @@ async function refreshStatus() {
 setInterval(refreshStatus, 4000);
 refreshStatus();
 
-// ---------- sensors dropdowns ----------
-fetch("/api/sensors").then((r) => r.json()).then((data) => {
-  const laserSel = document.getElementById("install-laser");
-  Object.entries(data.laser).forEach(([key, label]) => {
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = label;
-    laserSel.appendChild(opt);
-  });
-  const depthSel = document.getElementById("install-depth");
-  Object.entries(data.depth).forEach(([key, label]) => {
-    const opt = document.createElement("option");
-    opt.value = key;
-    opt.textContent = label;
-    depthSel.appendChild(opt);
-  });
-});
+// ---------- sensor registry (single source of truth) ----------
+// Everything sensor-related -- Install driver list, Bringup model codes, the
+// Docker/.env choices, the Sensors/LiDAR launcher, install/udev commands --
+// comes from ONE /api/sensors payload (server.py's LASER_SENSORS/DEPTH_SENSORS).
+// No parallel copies live in this file anymore.
+let SENSORS = { laser: {}, depth: {} };
+let SERIAL_PORTS = [];
 
-// Bringup's LINOROBOT2_LASER_SENSOR/DEPTH_SENSOR select the sensor model by
-// name only -- these are the actual `sensor` launch-arg choices declared in
-// linorobot2_bringup/launch/lasers.launch.py and the depth_topics dict in
-// sensors.launch.py, which is a finer-grained list than the Install tab's
-// driver-package groupings above (e.g. one "sllidar" install covers seven
-// distinct a1/a2/.../s3 model codes here).
-const BRINGUP_LASER_MODELS = ["ydlidar", "xv11", "ld06", "ld19", "stl27l", "a1", "a2", "a3", "c1", "s1", "s2", "s3"];
-const BRINGUP_DEPTH_MODELS = ["realsense", "astra", "zed", "zed2", "zed2i", "zedm", "oakd", "oakdlite", "oakdpro"];
-(function populateBringupSensorSelects() {
-  const laserSel = document.getElementById("bringup-laser-sensor");
-  BRINGUP_LASER_MODELS.forEach((m) => {
-    const opt = document.createElement("option");
-    opt.value = m;
-    opt.textContent = m;
-    laserSel.appendChild(opt);
-  });
-  const depthSel = document.getElementById("bringup-depth-sensor");
-  BRINGUP_DEPTH_MODELS.forEach((m) => {
-    const opt = document.createElement("option");
-    opt.value = m;
-    opt.textContent = m;
-    depthSel.appendChild(opt);
-  });
-})();
+function addOpt(sel, value, text) {
+  if (!sel) return;
+  const o = document.createElement("option");
+  o.value = value;
+  o.textContent = text;
+  sel.appendChild(o);
+}
+
+function laserEntryForModel(code) {
+  return Object.entries(SENSORS.laser).find(
+    ([, e]) => (e.models || []).some((m) => m.code === code)
+  );
+}
+
+function populateSensorSelects() {
+  // Install tab -- one entry per driver package
+  Object.entries(SENSORS.laser).forEach(([k, e]) => addOpt(document.getElementById("install-laser"), k, e.label));
+  Object.entries(SENSORS.depth).forEach(([k, e]) => addOpt(document.getElementById("install-depth"), k, e.label));
+
+  // Bringup tab -- one entry per model code (LINOROBOT2_*_SENSOR value)
+  Object.values(SENSORS.laser).forEach((e) =>
+    (e.models || []).forEach((m) => addOpt(document.getElementById("bringup-laser-sensor"), m.code, `${m.code} — ${m.label}`)));
+  Object.values(SENSORS.depth).forEach((e) =>
+    (e.models || []).forEach((m) => addOpt(document.getElementById("bringup-depth-sensor"), m.code, `${m.code} — ${m.label}`)));
+
+  // Docker tab -- only drivers that have a docker/.env key
+  Object.values(SENSORS.laser).forEach((e) => e.docker_key && addOpt(document.getElementById("docker-laser-sensor"), e.docker_key, `${e.docker_key} (${e.label})`));
+  Object.values(SENSORS.depth).forEach((e) => e.docker_key && addOpt(document.getElementById("docker-depth-sensor"), e.docker_key, `${e.docker_key} (${e.label})`));
+
+  // Sensors/LiDAR tab launcher -- one entry per model code
+  const lm = document.getElementById("laser-driver-model");
+  Object.values(SENSORS.laser).forEach((e) =>
+    (e.models || []).forEach((m) => addOpt(lm, m.code, `${m.code} — ${m.label}`)));
+  if (typeof updateLaserDriverFieldsVisibility === "function") updateLaserDriverFieldsVisibility();
+}
+
+function renderSerialPortList() {
+  const dl = document.getElementById("serial-ports-list");
+  if (dl) {
+    dl.innerHTML = "";
+    SERIAL_PORTS.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.preferred;
+      o.label = `${p.vendor || "?"} ${p.model || ""} ${p.usb_id ? "[" + p.usb_id + "]" : ""} → ${p.tty}`.trim();
+      dl.appendChild(o);
+    });
+  }
+  const box = document.getElementById("serial-ports-detected");
+  if (box) {
+    if (!SERIAL_PORTS.length) {
+      box.textContent = "No USB serial devices detected.";
+    } else {
+      box.innerHTML = SERIAL_PORTS.map((p) => {
+        // Most lidars use a generic CP2102/CH340/FTDI bridge, so VID:PID and
+        // the model string rarely tell devices apart -- the by-path (physical
+        // USB port) is the reliable identifier and what we store.
+        const idbits = [p.usb_id, p.vendor, p.model].filter(Boolean).join(" · ") || "generic UART";
+        const sn = p.serial ? ` · SN ${p.serial}` : " · no serial#";
+        return `<div style="margin-bottom:6px">` +
+          `<code>${escapeHtml(p.preferred)}</code><br>` +
+          `<span class="hint">${escapeHtml(idbits)}${escapeHtml(sn)} · now ${escapeHtml(p.tty)}</span>` +
+          `</div>`;
+      }).join("");
+    }
+  }
+}
+
+async function refreshSerialPorts() {
+  try {
+    const r = await fetch("/api/serial_ports");
+    SERIAL_PORTS = (await r.json()).ports || [];
+  } catch (e) {
+    SERIAL_PORTS = [];
+  }
+  renderSerialPortList();
+}
+
+fetch("/api/sensors")
+  .then((r) => r.json())
+  .then((data) => {
+    SENSORS = data;
+    populateSensorSelects();
+  })
+  .catch(() => {});
+refreshSerialPorts();
 
 // ---------- import config ----------
 document.getElementById("btn-import").addEventListener("click", async () => {
@@ -326,105 +377,35 @@ document.getElementById("btn-install-base").addEventListener("click", () => {
   runCommand(envPrefix() + cmd, { title: "Base install" });
 });
 
-// Sensor command tables mirrored from server.py's LASER_SENSORS/DEPTH_SENSORS
-// data (kept here too so the client can build the exact command string, same
-// division of responsibility as config-engine: client builds commands).
-const LASER_CMDS = {
-  ydlidar: {
-    install: [
-      "cd /tmp", "rm -rf YDLidar-SDK",
-      "git clone https://github.com/YDLIDAR/YDLidar-SDK.git",
-      "mkdir -p YDLidar-SDK/build && cd YDLidar-SDK/build",
-      "cmake .. && make", "sudo make install",
-      "cd {ws}",
-      "[ -d src/ydlidar_ros2_driver ] || git clone https://github.com/YDLIDAR/ydlidar_ros2_driver src/ydlidar_ros2_driver",
-      "chmod 0777 src/ydlidar_ros2_driver/startup/*",
-      "colcon build --symlink-install",
-    ],
-    udev: [
-      `echo 'KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", MODE:="0666", GROUP:="dialout", SYMLINK+="ydlidar"' | sudo tee /etc/udev/rules.d/ydlidar.rules`,
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-  xv11: {
-    install: ["cd {ws}", "[ -d src/xv_11_driver ] || git clone https://github.com/mjstn/xv_11_driver src/xv_11_driver", "colcon build"],
-    udev: null,
-  },
-  ldlidar: {
-    install: ["cd {ws}", "[ -d src/ldlidar_stl_ros2 ] || git clone https://github.com/hippo5329/ldlidar_stl_ros2.git src/ldlidar_stl_ros2", "colcon build"],
-    udev: [
-      "cd /tmp && wget -q https://raw.githubusercontent.com/linorobot/ldlidar/ros2/ldlidar.rules",
-      "sudo cp ldlidar.rules /etc/udev/rules.d",
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-  sllidar: {
-    install: ["cd {ws}", "[ -d src/sllidar_ros2 ] || git clone https://github.com/Slamtec/sllidar_ros2.git src/sllidar_ros2", "colcon build"],
-    udev: [
-      "sudo cp {ws}/src/sllidar_ros2/scripts/rplidar.rules /etc/udev/rules.d",
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-};
-
-const DEPTH_CMDS = {
-  realsense: {
-    install: ["sudo apt-get install -y ros-$ROS_DISTRO-realsense2-camera"],
-    udev: [
-      "cd /tmp && wget -q https://raw.githubusercontent.com/IntelRealSense/librealsense/master/config/99-realsense-libusb.rules",
-      "sudo cp 99-realsense-libusb.rules /etc/udev/rules.d",
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-  oakd: {
-    install: ["sudo apt-get install -y ros-$ROS_DISTRO-depthai-ros"],
-    udev: [
-      `echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' | sudo tee /etc/udev/rules.d/80-movidius.rules`,
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-  astra: {
-    install: [
-      "sudo apt-get install -y libuvc-dev libopenni2-dev", "cd {ws}",
-      "[ -d src/ros_astra_camera ] || git clone https://github.com/linorobot/ros_astra_camera src/ros_astra_camera",
-      "colcon build",
-    ],
-    udev: [
-      "sudo cp {ws}/src/ros_astra_camera/56-orbbec-usb.rules /etc/udev/rules.d/",
-      "sudo udevadm control --reload-rules && sudo udevadm trigger",
-    ],
-  },
-};
-
-function buildSensorCommand(table, key, skipUdev) {
-  const entry = table[key];
-  if (!entry) return null;
-  let steps = entry.install.slice();
-  if (!skipUdev && entry.udev) steps = steps.concat(entry.udev);
-  return steps.map((s) => s.replaceAll("{ws}", ws())).join(" && ");
+// Install/udev command assembly lives on the server now (build_sensor_install_cmd);
+// the client asks for the joined string via POST /api/sensor_install_cmd. No
+// mirrored command table here.
+async function fetchSensorInstallCmd(kind, key, { skipUdev = false, udevOnly = false } = {}) {
+  const r = await fetch("/api/sensor_install_cmd", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, key, skip_udev: skipUdev, udev_only: udevOnly, workspace_path: ws() }),
+  });
+  if (!r.ok) return null;
+  return (await r.json()).command || null;
 }
 
-function buildUdevOnlyCommand(table, key) {
-  const entry = table[key];
-  if (!entry || !entry.udev) return null;
-  return entry.udev.map((s) => s.replaceAll("{ws}", ws())).join(" && ");
+async function runSensorInstall(kind, selId, skipId, titlePrefix) {
+  const key = document.getElementById(selId).value;
+  if (!key) return;
+  const skip = document.getElementById(skipId).checked;
+  const cmd = await fetchSensorInstallCmd(kind, key, { skipUdev: skip });
+  if (!cmd) {
+    logLine(`[console] no install steps defined for ${kind} "${key}" -- see its own driver docs.`);
+    return;
+  }
+  runCommand(envPrefix() + `cd ${ws()} && ` + cmd, { title: `${titlePrefix}: ${key}` });
 }
 
-document.getElementById("btn-install-laser").addEventListener("click", () => {
-  const key = document.getElementById("install-laser").value;
-  if (!key) return;
-  const skip = document.getElementById("laser-skip-udev").checked;
-  const cmd = buildSensorCommand(LASER_CMDS, key, skip);
-  runCommand(envPrefix() + `cd ${ws()} && ` + cmd, { title: `Install laser: ${key}` });
-});
-
-document.getElementById("btn-install-depth").addEventListener("click", () => {
-  const key = document.getElementById("install-depth").value;
-  if (!key) return;
-  const skip = document.getElementById("depth-skip-udev").checked;
-  const cmd = buildSensorCommand(DEPTH_CMDS, key, skip);
-  runCommand(envPrefix() + `cd ${ws()} && ` + cmd, { title: `Install depth camera: ${key}` });
-});
+document.getElementById("btn-install-laser").addEventListener("click", () =>
+  runSensorInstall("laser", "install-laser", "laser-skip-udev", "Install laser"));
+document.getElementById("btn-install-depth").addEventListener("click", () =>
+  runSensorInstall("depth", "install-depth", "depth-skip-udev", "Install depth camera"));
 
 // ---------- Docker / Podman install mode ----------
 // linorobot2 ships its own docker/docker-compose.yaml + Dockerfile that need
@@ -454,14 +435,20 @@ function composeResolveSnippet() {
   return `COMPOSE="docker compose"; `;
 }
 
-// Docker/Podman's own LASER_SENSOR/DEPTH_SENSOR values (docker/.env.example)
-// are a coarser set than lasers.launch.py's `sensor` choices, and use
-// slightly different names for the same hardware (e.g. "rplidar" instead of
-// per-model a1/a2/.../s3) -- this maps each to the matching key in this
-// file's own LASER_CMDS/DEPTH_CMDS tables, for the *udev-rules-only* step
-// below (driver install itself happens inside the image, not on the host).
-const DOCKER_LASER_TO_NATIVE_KEY = { ldlidar: "ldlidar", rplidar: "sllidar", ydlidar: "ydlidar", xv11: "xv11" };
-const DOCKER_DEPTH_TO_NATIVE_KEY = { realsense: "realsense" }; // zed/zedm/zed2/zed2i: no native udev entry (ZED SDK-managed)
+// Docker/.env's LASER_SENSOR/DEPTH_SENSOR use a coarser name than
+// lasers.launch.py's per-model `sensor` codes (e.g. "rplidar", not a1/.../s3).
+// Look up the driver-package key from the registry's docker_key so the
+// *udev-rules-only* step below (driver install itself happens inside the
+// image) can reuse the same server-side command builder.
+function sensorKeyForDockerValue(kind, dockerVal) {
+  const table = kind === "laser" ? SENSORS.laser : SENSORS.depth;
+  const hit = Object.entries(table).find(([, e]) => e.docker_key === dockerVal);
+  return hit ? hit[0] : null;
+}
+function dockerLaserDevice(dockerVal) {
+  const k = sensorKeyForDockerValue("laser", dockerVal);
+  return k ? SENSORS.laser[k].symlink : null;
+}
 
 function cloneLinorobot2Command() {
   const workspace = document.getElementById("install-workspace").value.trim() || ws();
@@ -501,7 +488,7 @@ document.getElementById("btn-docker-build").addEventListener("click", () => {
   // required manual step for the `bringup` service -- an override file
   // (docker compose auto-merges *.override.yaml) so the vendored
   // docker-compose.yaml is never edited in place.
-  const laserDevice = { ldlidar: "/dev/ldlidar", rplidar: "/dev/rplidar", ydlidar: "/dev/ydlidar" }[laser];
+  const laserDevice = dockerLaserDevice(laser);
   const deviceLines = [`      - ${serialPort}:${serialPort}`];
   if (laserDevice) deviceLines.push(`      - ${laserDevice}:${laserDevice}`);
   const overrideBody =
@@ -525,25 +512,20 @@ document.getElementById("btn-docker-build").addEventListener("click", () => {
   runCommand(cmd, { title: `Docker/Podman build (${baseImage})` });
 });
 
-document.getElementById("btn-docker-udev").addEventListener("click", () => {
+document.getElementById("btn-docker-udev").addEventListener("click", async () => {
   const laser = document.getElementById("docker-laser-sensor").value;
   const depth = document.getElementById("docker-depth-sensor").value;
   const cmds = [];
-  const laserKey = DOCKER_LASER_TO_NATIVE_KEY[laser];
-  if (laserKey) {
-    const c = buildUdevOnlyCommand(LASER_CMDS, laserKey);
+  for (const [kind, dockerVal] of [["laser", laser], ["depth", depth]]) {
+    if (!dockerVal) continue;
+    const key = sensorKeyForDockerValue(kind, dockerVal);
+    if (!key) {
+      logLine(`[console] no registry entry for ${kind} "${dockerVal}" -- check its own driver docs (e.g. ZED SDK).`);
+      continue;
+    }
+    const c = await fetchSensorInstallCmd(kind, key, { udevOnly: true });
     if (c) cmds.push(c);
-    else logLine(`[console] "${laser}" has no persistent udev symlink available -- it'll enumerate as a plain /dev/ttyUSBx or /dev/ttyACMx.`);
-  } else if (laser) {
-    logLine(`[console] no native udev rule available for laser sensor "${laser}" -- check its own driver docs.`);
-  }
-  const depthKey = DOCKER_DEPTH_TO_NATIVE_KEY[depth];
-  if (depthKey) {
-    const c = buildUdevOnlyCommand(DEPTH_CMDS, depthKey);
-    if (c) cmds.push(c);
-    else logLine(`[console] "${depth}" has no udev rule to install.`);
-  } else if (depth) {
-    logLine(`[console] no native udev rule available for depth sensor "${depth}" -- check its own driver docs (e.g. ZED SDK).`);
+    else logLine(`[console] "${dockerVal}" has no persistent udev symlink -- it'll enumerate as a plain /dev/ttyUSBx or /dev/ttyACMx.`);
   }
   if (!cmds.length) return;
   runCommand(envPrefix() + cmds.join(" && "), { title: "Install udev rules (host)" });
@@ -987,52 +969,56 @@ document.getElementById("btn-mag-cal").addEventListener("click", async () => {
 });
 
 // ---------- laser driver (standalone, independent of Bringup/agent) ----------
+// Model list + persistent-symlink + baud all come from the sensor registry.
 // Two families, per linorobot2_bringup/launch/lasers.launch.py:
-// - "launch" kind: go through that file's own sensor=<model> Node, which
-//   already hardcodes a persistent /dev symlink for ydlidar/rplidar (only
-//   xv11 is stuck on a non-persistent /dev/ttyACM0, since that Node's
-//   parameters are plain literals with no LaunchConfiguration to override).
-// - "ld" kind (ld06/ld19/stl27l, the ldlidar_stl_ros2 package): that file
-//   also hardcodes port_name/port_baudrate as plain literals, so getting a
-//   configurable serial path/baud/UDP transport means running the node
-//   directly via `ros2 run` + `--ros-args -p`, bypassing the wrapper launch
-//   file entirely -- same reasoning as the Teleop tab's joy.yaml override.
-const LASER_MODELS = {
-  ydlidar: { kind: "launch", note: "persistent /dev/ydlidar symlink, fixed baud 128000 (from lasers.launch.py)" },
-  xv11: { kind: "launch", note: "/dev/ttyACM0 -- NOT persistent, fixed baud 115200 (not overridable here)" },
-  a1: { kind: "launch", note: "RPLIDAR A1 -- persistent /dev/rplidar symlink" },
-  a2: { kind: "launch", note: "RPLIDAR A2 -- persistent /dev/rplidar symlink" },
-  a3: { kind: "launch", note: "RPLIDAR A3 -- persistent /dev/rplidar symlink" },
-  c1: { kind: "launch", note: "RPLIDAR C1 -- persistent /dev/rplidar symlink" },
-  s1: { kind: "launch", note: "RPLIDAR S1 -- persistent /dev/rplidar symlink" },
-  s2: { kind: "launch", note: "RPLIDAR S2 -- persistent /dev/rplidar symlink" },
-  s3: { kind: "launch", note: "RPLIDAR S3 -- persistent /dev/rplidar symlink" },
-  ld06: { kind: "ld", product: "LDLiDAR_LD06", bins: 456, defaultBaud: "230400" },
-  ld19: { kind: "ld", product: "LDLiDAR_LD19", bins: 456, defaultBaud: "230400" },
-  stl27l: { kind: "ld", product: "LDLiDAR_STL27L", bins: 2160, defaultBaud: "921600" },
-};
-
+// - registry model has NO `product` field  -> delegate to lasers.launch.py
+//   `sensor:=<code>`, passing lidar_serial_port:= / lidar_transport:= (those
+//   ARE declared launch args). ydlidar/rplidar/xv11.
+// - registry model HAS `product`/`bins`/`baud` (ld06/ld19/stl27l) -> run the
+//   ldlidar_stl_ros2 node directly with `--ros-args -p`, which also unlocks
+//   its UDP-bridge / native-network modes.
 const laserModelSel = document.getElementById("laser-driver-model");
-Object.keys(LASER_MODELS).forEach((key) => {
-  const opt = document.createElement("option");
-  opt.value = key;
-  opt.textContent = key;
-  laserModelSel.appendChild(opt);
-});
+
+function laserModelMeta(code) {
+  const hit = laserEntryForModel(code);
+  if (!hit) return null;
+  const [key, entry] = hit;
+  const m = (entry.models || []).find((x) => x.code === code) || {};
+  return {
+    key, entry, code,
+    isLd: Boolean(m.product),
+    product: m.product,
+    bins: m.bins,
+    baud: m.baud || entry.default_baud || "",
+    symlink: entry.symlink,
+  };
+}
+
+function laserDefaultPort(meta) {
+  const c = state.config || {};
+  return c.laser_serial_port || meta.symlink || "";
+}
 
 function updateLaserDriverFieldsVisibility() {
-  const model = LASER_MODELS[laserModelSel.value];
-  const isLd = model.kind === "ld";
-  document.getElementById("laser-driver-ld-fields").style.display = isLd ? "block" : "none";
-  document.getElementById("laser-driver-simple-hint").textContent = isLd ? "" : model.note;
-  if (isLd) {
-    document.getElementById("laser-driver-baud").value = model.defaultBaud;
-    updateLaserDriverModeVisibility();
+  const meta = laserModelMeta(laserModelSel.value);
+  if (!meta) return;
+  document.getElementById("laser-driver-ld-fields").style.display = meta.isLd ? "block" : "none";
+  const hint = document.getElementById("laser-driver-simple-hint");
+  if (hint) {
+    hint.textContent = meta.isLd
+      ? ""
+      : `Delegates to lasers.launch.py sensor:=${meta.code}. Serial port below is passed as lidar_serial_port:= (blank = the driver's own /dev symlink).`;
   }
+  const portField = document.getElementById("laser-driver-serial-port");
+  if (portField) portField.value = laserDefaultPort(meta);
+  const baudField = document.getElementById("laser-driver-baud");
+  if (baudField && meta.isLd) baudField.value = (state.config || {}).laser_baud || meta.baud;
+  updateLaserDriverModeVisibility();
 }
 
 function updateLaserDriverModeVisibility() {
-  const mode = document.getElementById("laser-driver-mode").value;
+  const meta = laserModelMeta(laserModelSel.value);
+  const mode = meta && meta.isLd ? document.getElementById("laser-driver-mode").value : "serial";
   document.getElementById("laser-driver-serial-row").style.display = mode === "serial" ? "flex" : "none";
   document.getElementById("laser-driver-udpbridge-row").style.display = mode === "udp_bridge" ? "flex" : "none";
   document.getElementById("laser-driver-netaddr-row").style.display =
@@ -1041,15 +1027,27 @@ function updateLaserDriverModeVisibility() {
 
 laserModelSel.addEventListener("change", updateLaserDriverFieldsVisibility);
 document.getElementById("laser-driver-mode").addEventListener("change", updateLaserDriverModeVisibility);
-updateLaserDriverFieldsVisibility();
+const btnDetectPorts = document.getElementById("btn-laser-detect-ports");
+if (btnDetectPorts) btnDetectPorts.addEventListener("click", refreshSerialPorts);
 
-function ldNodeParams(model, overrides) {
+function persistLaserPort() {
+  const port = document.getElementById("laser-driver-serial-port").value.trim();
+  const meta = laserModelMeta(laserModelSel.value);
+  const baud = meta && meta.isLd ? document.getElementById("laser-driver-baud").value.trim() : "";
+  fetch("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ laser_serial_port: port, laser_baud: baud }),
+  }).then((r) => r.json()).then((c) => { state.config = c; }).catch(() => {});
+}
+
+function ldNodeParams(meta, overrides) {
   const base = {
-    product_name: model.product,
+    product_name: meta.product,
     topic_name: "scan",
     frame_id: "laser",
     laser_scan_dir: "true",
-    bins: String(model.bins),
+    bins: String(meta.bins),
     enable_angle_crop_func: "false",
     angle_crop_min: "135.0",
     angle_crop_max: "225.0",
@@ -1059,19 +1057,22 @@ function ldNodeParams(model, overrides) {
 }
 
 function buildLaserDriverCommand() {
-  const modelKey = laserModelSel.value;
-  const model = LASER_MODELS[modelKey];
-  if (model.kind === "launch") {
-    return { command: envPrefix() + `ros2 launch linorobot2_bringup lasers.launch.py sensor:=${modelKey}` };
+  const meta = laserModelMeta(laserModelSel.value);
+  const port = document.getElementById("laser-driver-serial-port").value.trim();
+  persistLaserPort();
+
+  if (!meta.isLd) {
+    let cmd = `ros2 launch linorobot2_bringup lasers.launch.py sensor:=${meta.code}`;
+    if (port) cmd += ` lidar_transport:=serial lidar_serial_port:=${port}`;
+    return { command: envPrefix() + cmd };
   }
 
   const mode = document.getElementById("laser-driver-mode").value;
-  const baud = document.getElementById("laser-driver-baud").value.trim() || model.defaultBaud;
+  const baud = document.getElementById("laser-driver-baud").value.trim() || meta.baud;
   const nodeCmd = "ros2 run ldlidar_stl_ros2 ldlidar_stl_ros2_node";
 
   if (mode === "serial") {
-    const port = document.getElementById("laser-driver-serial-port").value.trim();
-    const params = ldNodeParams(model, { comm_mode: "serial", port_name: port, port_baudrate: baud });
+    const params = ldNodeParams(meta, { comm_mode: "serial", port_name: port || meta.symlink, port_baudrate: baud });
     return { command: envPrefix() + `${nodeCmd} --ros-args ${params}` };
   }
 
@@ -1084,7 +1085,7 @@ function buildLaserDriverCommand() {
     // comm_mode=serial like any USB-attached unit.
     const udpPort = document.getElementById("laser-driver-udp-port").value.trim() || "8889";
     const bridgePath = document.getElementById("laser-driver-bridge-path").value.trim() || "/dev/lidar_udp_bridge";
-    const params = ldNodeParams(model, { comm_mode: "serial", port_name: bridgePath, port_baudrate: baud });
+    const params = ldNodeParams(meta, { comm_mode: "serial", port_name: bridgePath, port_baudrate: baud });
     const bridgeCmd =
       `command -v socat >/dev/null 2>&1 || sudo apt-get install -y socat; ` +
       `sudo pkill -f "socat.*${bridgePath}" 2>/dev/null; sleep 0.3; ` +
@@ -1097,7 +1098,7 @@ function buildLaserDriverCommand() {
   // firmware's raw-relay feature above, offered for completeness.
   const serverIp = document.getElementById("laser-driver-server-ip").value.trim() || "0.0.0.0";
   const serverPort = document.getElementById("laser-driver-server-port").value.trim() || "8889";
-  const params = ldNodeParams(model, {
+  const params = ldNodeParams(meta, {
     comm_mode: mode, server_ip: serverIp, server_port: serverPort, port_baudrate: baud,
   });
   return { command: envPrefix() + `${nodeCmd} --ros-args ${params}` };

@@ -125,23 +125,10 @@
             </select>
           </label>
           <label>Laser sensor
-            <select id="docker-laser-sensor">
-              <option value="">-- none --</option>
-              <option value="ldlidar">ldlidar (LD06/LD19/STL27L)</option>
-              <option value="rplidar">rplidar (A1/A2/A3/...)</option>
-              <option value="ydlidar">ydlidar</option>
-              <option value="xv11">xv11</option>
-            </select>
+            <select id="docker-laser-sensor"><option value="">-- none --</option></select>
           </label>
           <label>Depth sensor
-            <select id="docker-depth-sensor">
-              <option value="">-- none --</option>
-              <option value="realsense">realsense</option>
-              <option value="zed">zed</option>
-              <option value="zedm">zedm</option>
-              <option value="zed2">zed2</option>
-              <option value="zed2i">zed2i</option>
-            </select>
+            <select id="docker-depth-sensor"><option value="">-- none --</option></select>
           </label>
         </div>
         <div class="row">
@@ -521,6 +508,21 @@
         <span class="hint" id="laser-driver-simple-hint"></span>
       </div>
 
+      <div class="row" id="laser-driver-serial-row">
+        <label style="flex:1">Serial port
+          <input type="text" id="laser-driver-serial-port" list="serial-ports-list"
+                 placeholder="/dev/serial/by-path/... (blank = driver's own /dev symlink)">
+        </label>
+        <button type="button" id="btn-laser-detect-ports" class="btn btn-sm">&#8635; detect</button>
+      </div>
+      <datalist id="serial-ports-list"></datalist>
+      <p class="hint">Stored as <code>/dev/serial/by-path/&hellip;</code> (the physical USB port),
+        which survives reboot and replug &mdash; unlike <code>/dev/ttyUSB<i>n</i></code>, and
+        unlike <code>by-id</code>, which many generic CP2102/CH340 lidar bridges can't populate.
+        Most lidars share a generic UART chip, so pick by <b>physical port</b>; re-run
+        <b>detect</b> after replugging to see which entry moved.</p>
+      <div id="serial-ports-detected" class="hint" style="font-family:monospace"></div>
+
       <div id="laser-driver-ld-fields" style="display:none">
         <div class="row">
           <label>Connection
@@ -532,13 +534,6 @@
             </select>
           </label>
           <label>Baudrate <input type="text" id="laser-driver-baud"></label>
-        </div>
-        <div class="row" id="laser-driver-serial-row">
-          <label>Serial port (use the persistent <code>/dev/&lt;name&gt;</code> udev symlink, not
-            a raw <code>/dev/ttyUSBx</code> -- USB enumeration order isn't guaranteed across
-            reboots)
-            <input type="text" id="laser-driver-serial-port" value="/dev/ldlidar">
-          </label>
         </div>
         <div class="row" id="laser-driver-udpbridge-row" style="display:none">
           <p class="hint">The MCU relays raw LiDAR UART bytes as UDP datagrams to this port
