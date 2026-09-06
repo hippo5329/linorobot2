@@ -1142,14 +1142,16 @@ class Handler(BaseHTTPRequestHandler):
             requested_distro = query_params.get("distro") or detect_ros_distro()
             requested_base = query_params.get("base") or "2wd"
             cfg_path = get_nav2_config_path(requested_distro)
+            cfg_text = get_nav2_config(requested_distro)
             self._send_json({
                 "distro": requested_distro,
                 "base": requested_base,
-                "config": get_nav2_config(requested_distro),
+                "config": cfg_text,
                 "path": cfg_path,
                 "exists": os.path.exists(cfg_path),
                 "supported_distros": SUPPORTED_DISTROS,
                 "supported_bases": ["2wd", "4wd", "mecanum"],
+                "depth_pointcloud_active": patcher.costmap_depth_active(cfg_text) if patcher else None,
             })
             return
 
@@ -1381,6 +1383,26 @@ class Handler(BaseHTTPRequestHandler):
                 return
             saved_path = save_nav2_config(cfg_text, distro)
             self._send_json({"status": "ok", "distro": distro, "path": saved_path, "length": len(cfg_text)})
+            return
+
+        if path == "/api/nav2_config/costmap_sources":
+            # Gate the depth camera in/out of the costmap `observation_sources`
+            # to match the robot's selected depth sensor -- avoids a stale
+            # observation-buffer warning when there is no camera.
+            distro = data.get("distro") or detect_ros_distro()
+            depth_enabled = bool(data.get("depth_enabled"))
+            if not patcher:
+                self._send_json({"error": "patcher unavailable"}, 500)
+                return
+            new_cfg = patcher.patch_costmap_sources(get_nav2_config(distro), depth_enabled)
+            saved_path = save_nav2_config(new_cfg, distro)
+            self._send_json({
+                "status": "ok",
+                "distro": distro,
+                "depth_pointcloud_active": patcher.costmap_depth_active(new_cfg),
+                "path": saved_path,
+                "config": new_cfg,
+            })
             return
 
         if path == "/api/nav2_config/reset":

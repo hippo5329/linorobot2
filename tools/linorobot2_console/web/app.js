@@ -832,6 +832,21 @@ wireStartStop({
     const distro = getDistro();
     const defaultParams = `${state.status?.web_dir || "."}/console_nav2_${distro}.yaml`;
     const paramsArg = customParams ? ` params_file:=${customParams}` : ` params_file:=${defaultParams}`;
+
+    // Gate the depth camera in/out of the costmap observation_sources to match
+    // the selected Bringup depth sensor (skip when a custom params file is used
+    // -- that's the user's own, don't rewrite it).
+    if (!customParams) {
+      const depthEnabled = Boolean(document.getElementById("bringup-depth-sensor")?.value);
+      try {
+        await fetch("/api/nav2_config/costmap_sources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ distro, depth_enabled: depthEnabled }),
+        });
+        if (nav2Textarea) loadNav2Config(distro);
+      } catch (e) { /* non-fatal */ }
+    }
     return envPrefix() +
       `if [ -f ${launcher} ]; then ` +
       `ros2 launch ${launcher}${mapArg}${paramsArg} distro:=${distro} sim:=false; ` +
@@ -1211,6 +1226,13 @@ async function loadNav2Config(distro) {
     const data = await res.json();
     if (nav2Textarea && data.config) {
       nav2Textarea.value = data.config;
+    }
+    const hint = document.getElementById("nav2-depth-costmap-hint");
+    if (hint) {
+      const on = data.depth_pointcloud_active;
+      hint.textContent = on === null || on === undefined
+        ? ""
+        : `Depth camera → costmap: ${on ? "ON (observation_sources: scan pointcloud)" : "off (lidar only)"} — set automatically from the Bringup depth-sensor selection when you Start navigation.`;
     }
   } catch (e) {}
 }

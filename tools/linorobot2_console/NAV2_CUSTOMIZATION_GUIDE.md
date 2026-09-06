@@ -117,6 +117,37 @@ Cost ^
   2. Increase `cost_scaling_factor` to `5.5` – `6.0`.
   This creates a steep potential drop, opening a low-cost valley ($< 50$) through the exact center of the door.
 
+### 3.2 Costmap Observation Sources — 2D LiDAR + Depth Camera Together
+
+Nav2 costmap layers fuse multiple sensors through the `observation_sources`
+list. Running a 2D LiDAR and a depth camera at the same time is supported and
+standard: the LiDAR feeds a `LaserScan` source, the depth camera feeds a
+`PointCloud2` source (`/camera/depth/color/points`), and both mark/clear the
+same costmap.
+
+All shipped configs now define both. Every costmap layer carries:
+
+```yaml
+observation_sources: scan pointcloud
+scan:        { topic: /scan,                        data_type: "LaserScan" }
+pointcloud:  { topic: /camera/depth/color/points,   data_type: "PointCloud2" }
+```
+
+The `collision_monitor` (a fast safety loop) is deliberately kept LiDAR-only.
+
+**Gating.** An `observation_sources` entry whose topic never publishes just logs
+a periodic "observation buffer has not been updated" warning — harmless but
+noisy on a robot with no depth camera. Console removes `pointcloud` from
+`observation_sources` (the `pointcloud:` block stays, inert) whenever no depth
+sensor is selected on the **Bringup** tab, and restores it when one is —
+applied automatically to `console_nav2_<distro>.yaml` when you press **Start
+navigation**. `patcher.py` exposes this directly:
+
+```python
+patcher.patch_costmap_sources(text, depth_enabled=False)  # -> observation_sources: scan
+patcher.costmap_depth_active(text)                          # -> bool
+```
+
 ---
 
 ## 4. Path Tracking & Oscillation Damping (RPP & DWB)

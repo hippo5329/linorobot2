@@ -463,6 +463,30 @@ def patch_slam_text(text, resolution=None, max_laser_range=None,
     return text
 
 
+# Costmap layers carry `observation_sources: scan pointcloud` in the jazzy+
+# templates (matching humble). The depth `pointcloud:` block is always defined
+# but is inert unless listed here -- so toggling this one token is how the
+# console gates the depth camera in/out of the costmap on the selected robot.
+_OBS_SCAN_ONLY = re.compile(r'(?m)^([ \t]*observation_sources:[ \t]*)scan[ \t]*$')
+_OBS_SCAN_PC = re.compile(r'(?m)^([ \t]*observation_sources:[ \t]*)scan[ \t]+pointcloud[ \t]*$')
+
+
+def patch_costmap_sources(text, depth_enabled):
+    """Add/remove `pointcloud` from every scalar `observation_sources: scan` line.
+
+    The `["scan"]` list form (collision_monitor -- a fast safety loop kept
+    lidar-only by design) is never touched.
+    """
+    if depth_enabled:
+        return _OBS_SCAN_ONLY.sub(r'\1scan pointcloud', text)
+    return _OBS_SCAN_PC.sub(r'\1scan', text)
+
+
+def costmap_depth_active(text):
+    """True if any costmap layer currently consumes the depth pointcloud."""
+    return bool(_OBS_SCAN_PC.search(text))
+
+
 def patch_nav2_file(input_path, output_path=None, **kwargs):
     if not os.path.exists(input_path):
         raise FileNotFoundError(f'File not found: {input_path}')

@@ -170,6 +170,43 @@ class TestLinorobot2Console(unittest.TestCase):
             self.assertTrue(p["preferred"])
             self.assertTrue(p["tty"].startswith("/dev/tty"))
 
+    def test_costmap_depth_source_gating(self):
+        import patcher
+        sample = (
+            "local_costmap:\n  local_costmap:\n    ros__parameters:\n"
+            "      voxel_layer:\n        observation_sources: scan pointcloud\n"
+            "        scan:\n          topic: /scan\n"
+            "        pointcloud:\n          topic: /camera/depth/color/points\n"
+            "collision_monitor:\n  ros__parameters:\n"
+            "    observation_sources: [\"scan\"]\n"
+        )
+        self.assertTrue(patcher.costmap_depth_active(sample))
+        off = patcher.patch_costmap_sources(sample, depth_enabled=False)
+        self.assertIn("observation_sources: scan\n", off)
+        self.assertNotIn("scan pointcloud", off)
+        self.assertFalse(patcher.costmap_depth_active(off))
+        # collision_monitor's list form is never touched
+        self.assertIn('observation_sources: ["scan"]', off)
+        # round-trips back on
+        on = patcher.patch_costmap_sources(off, depth_enabled=True)
+        self.assertEqual(on, sample)
+        # idempotent
+        self.assertEqual(patcher.patch_costmap_sources(on, depth_enabled=True), sample)
+
+    def test_shipped_nav_templates_have_gated_pointcloud(self):
+        """Jazzy+ templates ship with the depth pointcloud source + block (like humble)."""
+        cfg_dir = os.path.join(os.path.dirname(__file__), "config")
+        for distro in ("jazzy", "lyrical", "rolling"):
+            for suffix in ("", "_mecanum"):
+                path = os.path.join(cfg_dir, f"nav2_{distro}{suffix}.yaml")
+                with open(path) as fh:
+                    text = fh.read()
+                self.assertEqual(text.count("observation_sources: scan pointcloud"), 2, path)
+                self.assertIn("topic: /camera/depth/color/points", text)
+                self.assertIn('data_type: "PointCloud2"', text)
+                # collision_monitor stays lidar-only
+                self.assertIn('observation_sources: ["scan"]', text)
+
     def test_upstream_github_issues_diagnostics(self):
         """Test AI diagnosis and patches for common upstream GitHub issues (#113, #37, #76, #12)."""
         from server import analyze_robotics_ai
