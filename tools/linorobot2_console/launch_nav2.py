@@ -14,7 +14,9 @@
 # limitations under the License.
 
 import os
+import re
 import sys
+import tempfile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -49,6 +51,38 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
         else:
             selected_params = os.path.join(console_dir, 'web', 'console_nav2_params.yaml')
 
+    # Depth camera -> costmap gating (Console-side; upstream navigation.launch.py
+    # is left untouched -- we resolve it here and hand it a finished params
+    # file). The shipped configs list `observation_sources: scan pointcloud`;
+    # when there is no depth camera we pass a copy with `pointcloud` dropped
+    # (its inert `pointcloud:` block stays). 'auto' = on iff
+    # LINOROBOT2_DEPTH_SENSOR is set (the same env var linorobot2_bringup uses).
+    # Same transform as tools/linorobot2_console/patcher.py:patch_costmap_sources.
+    depth_arg = context.launch_configurations.get('depth_costmap', 'auto').strip().lower()
+    if depth_arg in ('', 'auto'):
+        depth_enabled = bool(os.environ.get('LINOROBOT2_DEPTH_SENSOR', '').strip())
+    else:
+        depth_enabled = depth_arg in ('true', '1', 'yes', 'on')
+
+    depth_note = "on"
+    if not depth_enabled:
+        depth_note = "off"
+        try:
+            with open(selected_params) as f:
+                original = f.read()
+            gated = re.sub(
+                r'(?m)^([ \t]*observation_sources:[ \t]*)scan[ \t]+pointcloud[ \t]*$',
+                r'\1scan', original)
+            if gated != original:
+                tmp = tempfile.NamedTemporaryFile(
+                    mode='w', prefix='console_nav2_gated_', suffix='.yaml', delete=False)
+                tmp.write(gated)
+                tmp.close()
+                selected_params = tmp.name
+                depth_note = "off (generated %s)" % os.path.basename(tmp.name)
+        except OSError:
+            pass
+
     # Resolve SLAM params:
     if passed_slam_params and os.path.exists(passed_slam_params):
         selected_slam_params = passed_slam_params
@@ -68,7 +102,8 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
 
     mode_str = "SLAM Mapping" if is_slam else "AMCL Navigation"
     return [
-        LogInfo(msg=f"[Linorobot2 Console] Launching {mode_str} (distro: '{distro}', base: '{base}') with Nav2: '{selected_params}'"),
+        LogInfo(msg=f"[Linorobot2 Console] Launching {mode_str} (distro: '{distro}', base: '{base}') "
+                    f"with Nav2: '{selected_params}' | depth->costmap: {depth_note}"),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav_launch_path),
             launch_arguments={
@@ -77,7 +112,6 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
                 'base': base,
                 'params_file': selected_params,
                 'slam_params_file': selected_slam_params,
-                'depth_costmap': LaunchConfiguration('depth_costmap'),
                 'map': LaunchConfiguration('map'),
                 'sim': LaunchConfiguration('sim'),
                 'rviz': LaunchConfiguration('rviz'),

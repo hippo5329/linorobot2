@@ -193,20 +193,22 @@ class TestLinorobot2Console(unittest.TestCase):
         # idempotent
         self.assertEqual(patcher.patch_costmap_sources(on, depth_enabled=True), sample)
 
-    def test_launchers_expose_depth_costmap_gate(self):
-        """navigation.launch.py + launch_nav2.py declare depth_costmap and gate the params file."""
+    def test_depth_costmap_gate_is_console_only(self):
+        """The depth->costmap gate lives in the console's launch_nav2.py; upstream navigation.launch.py is untouched."""
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        nav = os.path.join(root, "linorobot2_navigation", "launch", "navigation.launch.py")
-        with open(nav) as fh:
+        with open(os.path.join(root, "linorobot2_navigation", "launch", "navigation.launch.py")) as fh:
             nav_src = fh.read()
-        self.assertIn("name='depth_costmap'", nav_src)
-        self.assertIn("LINOROBOT2_DEPTH_SENSOR", nav_src)
-        self.assertIn("scan[ \\t]+pointcloud", nav_src)   # the same gate regex as patcher
-        self.assertIn("tempfile.NamedTemporaryFile", nav_src)
+        self.assertNotIn("depth_costmap", nav_src)
+        self.assertNotIn("LINOROBOT2_DEPTH_SENSOR", nav_src)
+
         with open(os.path.join(os.path.dirname(__file__), "launch_nav2.py")) as fh:
             cons_src = fh.read()
         self.assertIn("name='depth_costmap'", cons_src)
-        self.assertIn("'depth_costmap': LaunchConfiguration('depth_costmap')", cons_src)
+        self.assertIn("LINOROBOT2_DEPTH_SENSOR", cons_src)
+        self.assertIn("scan[ \\t]+pointcloud", cons_src)   # same gate regex as patcher
+        self.assertIn("tempfile.NamedTemporaryFile", cons_src)
+        # the arg is consumed here, not forwarded to navigation.launch.py
+        self.assertNotIn("'depth_costmap':", cons_src)
 
     def test_shipped_nav_templates_have_gated_pointcloud(self):
         """Jazzy+ templates ship with the depth pointcloud source + block (like humble)."""

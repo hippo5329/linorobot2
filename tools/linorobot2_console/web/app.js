@@ -833,9 +833,11 @@ wireStartStop({
     const defaultParams = `${state.status?.web_dir || "."}/console_nav2_${distro}.yaml`;
     const paramsArg = customParams ? ` params_file:=${customParams}` : ` params_file:=${defaultParams}`;
 
-    // Depth camera -> costmap: our launch script generates a gated copy of the
-    // params file at launch (it never mutates the editable YAML). Pass an
-    // explicit true/false from the Bringup depth-sensor selection.
+    // Depth camera -> costmap: the console's launch_nav2.py resolves this and
+    // hands nav2 a finished params file (it never mutates the editable YAML and
+    // never touches upstream navigation.launch.py). Pass an explicit true/false
+    // from the Bringup depth-sensor selection -- only the console launcher
+    // understands depth_costmap, so it's omitted from the plain-launch fallback.
     const depthArg = ` depth_costmap:=${document.getElementById("bringup-depth-sensor")?.value ? "true" : "false"}`;
     return envPrefix() +
       `if [ -f ${launcher} ]; then ` +
@@ -843,7 +845,7 @@ wireStartStop({
       `elif [ -f ${customParams || defaultParams} ]; then ` +
       `ros2 launch nav2_bringup bringup_launch.py${mapArg}${paramsArg} use_sim_time:=false; ` +
       `else ` +
-      `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}${depthArg}; ` +
+      `ros2 launch linorobot2_navigation navigation.launch.py${mapArg}; ` +
       `fi`;
   },
 });
