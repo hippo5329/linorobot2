@@ -26,7 +26,7 @@
     </select></span>
     <span class="hdr-field" id="hdr-workspace">Workspace: <b>--</b></span>
     <span class="hdr-field" id="hdr-bringup">Bringup: <span class="pill pill-unknown" id="hdr-bringup-pill">down</span></span>
-    <span class="hdr-field" id="hdr-agent">Agent: <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span></span>
+    <span class="hdr-field" id="hdr-agent">Agent: <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span> <button type="button" class="btn-mini" id="hdr-btn-agent-check" title="Check Agent Port Availability" style="margin-left:4px;">🔍</button></span>
   </div>
 </header>
 
@@ -670,6 +670,8 @@
         </label>
         <label>Device (serial) <input type="text" id="cfg-agent-device"></label>
         <button type="button" class="btn pick-btn" data-pick="serial" data-target="cfg-agent-device">&#128268; ports</button>
+        <button type="button" class="btn" id="btn-agent-port-check">🔍 Check Port</button>
+        <span class="pill pill-unknown" id="agent-port-status-pill" style="display:none;"></span>
         <label>Port (udp4) <input type="text" id="cfg-agent-port"></label>
         <label>Baud (serial) <input type="text" id="cfg-agent-baud"></label>
       </div>
@@ -728,5 +730,24 @@
 </div>
 
 <script src="app.js"></script>
+<!-- micro-ROS Agent Port Conflict Modal -->
+<div id="port-modal-overlay">
+  <div id="port-modal-panel">
+    <div class="pk-head">
+      <span style="color:#ef4444; font-size:14px; font-weight:bold;">⚠️ micro-ROS Agent Port Conflict</span>
+      <button type="button" class="btn btn-sm" id="btn-close-port-modal" style="margin-left:auto;">&times;</button>
+    </div>
+    <div style="padding: 14px;">
+      <p id="port-conflict-summary" style="font-weight:600; font-size:14px; margin:0 0 10px 0; color:#fca5a5;"></p>
+      <div id="port-conflict-details" style="font-family:monospace; font-size:12px; background:rgba(0,0,0,0.45); padding:10px; border-radius:6px; margin-bottom:15px; max-height:160px; overflow-y:auto; white-space:pre-wrap; color:#e2e8f0;"></div>
+      <p class="hint" style="margin:0 0 15px 0;">Another process, agent, or container is currently accessing this port. If you proceed without releasing the port, serial connection or agent startup will fail.</p>
+      <div class="row" style="gap:10px; justify-content:flex-end;">
+        <button type="button" class="btn" id="btn-ignore-port-conflict">Ignore</button>
+        <button type="button" class="btn btn-danger" id="btn-release-port-conflict">⚡ Release Port &amp; Stop Agent</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

@@ -229,3 +229,20 @@ body {
 #picker-panel .pk-foot .hint { align-self: center; margin-right: auto; }
 
 #picker-path[hidden] { display: none; }
+
+
+/* ---- port conflict modal overlay ---- */
+#port-modal-overlay {
+  position: fixed; inset: 0; background: rgba(2, 6, 16, 0.7);
+  display: none; align-items: center; justify-content: center; z-index: 1000;
+}
+#port-modal-overlay.open { display: flex; }
+#port-modal-panel {
+  width: min(540px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+  background: #0c121e; border: 1px solid var(--border-soft, #2a3446);
+  border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow: hidden;
+}
+#port-modal-panel .pk-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft, #2a3446); font-weight: 600; color: #e2e8f0;
+}

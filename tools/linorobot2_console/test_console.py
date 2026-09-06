@@ -702,5 +702,53 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertEqual(os.environ["LINOROBOT2_LASER_SENSOR"], "ld19")
         self.assertEqual(os.environ["LINOROBOT2_DEPTH_SENSOR"], "realsense")
 
+
+    def test_agent_port_check_available(self):
+        res = server.check_agent_port_status("/dev/ttyNonExistent99", mode="serial")
+        self.assertEqual(res["status"], "ok")
+        self.assertFalse(res["in_use"])
+        self.assertEqual(res["summary"], "Port is available")
+
+    def test_parse_port_check_output_container(self):
+        sample = (
+            "---FUSER---\n"
+            "---CONTAINERS---\n"
+            "e409bcb5a438|uros-pico2-test|docker.io/microros/micro-ros-agent:jazzy|serial --dev /dev/ttyACM0 -b 921600\n"
+            "---PROCESSES---\n"
+        )
+        res = {
+            "status": "ok", "in_use": False, "mode": "serial",
+            "target": "/dev/ttyACM0", "holder_type": "none",
+            "pids": [], "process_names": [], "container_id": "",
+            "container_name": "", "is_microros": False,
+            "details": "", "summary": "Port is available"
+        }
+        parsed = server._parse_port_check_output(sample, "/dev/ttyACM0", "serial", 8888, res)
+        self.assertTrue(parsed["in_use"])
+        self.assertEqual(parsed["holder_type"], "container")
+        self.assertEqual(parsed["container_name"], "uros-pico2-test")
+        self.assertTrue(parsed["is_microros"])
+
+    def test_parse_port_check_output_fuser(self):
+        sample = (
+            "---FUSER---\n"
+            "1355755\n"
+            "---CONTAINERS---\n"
+            "---PROCESSES---\n"
+            "1355755 micro_ros_agent serial --dev /dev/ttyACM0 -b 1500000\n"
+        )
+        res = {
+            "status": "ok", "in_use": False, "mode": "serial",
+            "target": "/dev/ttyACM0", "holder_type": "none",
+            "pids": [], "process_names": [], "container_id": "",
+            "container_name": "", "is_microros": False,
+            "details": "", "summary": "Port is available"
+        }
+        parsed = server._parse_port_check_output(sample, "/dev/ttyACM0", "serial", 8888, res)
+        self.assertTrue(parsed["in_use"])
+        self.assertEqual(parsed["holder_type"], "process")
+        self.assertIn("1355755", parsed["pids"])
+        self.assertTrue(parsed["is_microros"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -634,6 +634,29 @@ function findOrBuildAgentCommand() {
 function agentLaunchCommand() {
   const c = state.config || {};
   const transport = document.getElementById("cfg-agent-transport").value || c.agent_transport || "serial";
+  const device = document.getElementById("cfg-agent-device").value || c.agent_device || "/dev/ttyACM0";
+  const port = document.getElementById("cfg-agent-port").value || c.agent_port || "8888";
+  const baud = document.getElementById("cfg-agent-baud").value || c.agent_baud || "921600";
+  const isDocker = document.getElementById("cfg-agent-use-docker") ? document.getElementById("cfg-agent-use-docker").checked : (installModeSel?.value !== "native");
+
+  const preClean = transport === "udp4" ? "" : `fuser -k -TERM ${device} 2>/dev/null || true; sleep 0.5; `;
+  if (isDocker) {
+    const engine = (installModeSel?.value === "podman") ? "podman" : "docker";
+    const devFlags = transport === "udp4" ? "" : `--device ${device}`;
+    const agentArgs = transport === "udp4"
+      ? `udp4 --port ${port}`
+      : `serial --dev ${device} -b ${baud}`;
+    return `${preClean}${engine} run --rm --net=host --privileged -v /dev:/dev ${devFlags} -e ROS_DOMAIN_ID=0 microros/micro-ros-agent:${state.status?.ros_distro || "jazzy"} ${agentArgs}`;
+  }
+  const runLine = transport === "udp4"
+    ? `ros2 run micro_ros_agent micro_ros_agent udp4 -p ${port}`
+    : `ros2 run micro_ros_agent micro_ros_agent serial --dev ${device} -b ${baud}`;
+  return envPrefix() + `[ -f ~/uros_ws/install/setup.bash ] && source ~/uros_ws/install/setup.bash; ` + preClean + runLine;
+}
+
+function _unused_old_agentLaunchCommand() {
+  const c = state.config || {};
+  const transport = document.getElementById("cfg-agent-transport").value || c.agent_transport || "serial";
   const device = document.getElementById("cfg-agent-device").value || c.agent_device || "/dev/ttyUSB0";
   const port = document.getElementById("cfg-agent-port").value || c.agent_port || "8888";
   const baud = document.getElementById("cfg-agent-baud").value || c.agent_baud || "921600";
@@ -1985,3 +2008,100 @@ setTimeout(() => {
   loadRobotConfig();
 }, 400);
 
+
+
+// ---------- micro-ROS Agent Port Conflict Detection & Lifecycle ----------
+async function checkAgentPortStatus(opts = {}) {
+  const c = state.config || {};
+  const transport = document.getElementById("cfg-agent-transport")?.value || c.agent_transport || "serial";
+  const device = document.getElementById("cfg-agent-device")?.value || c.agent_device || "/dev/ttyACM0";
+  const port = document.getElementById("cfg-agent-port")?.value || c.agent_port || "8888";
+  
+  const statusPill = document.getElementById("agent-port-status-pill");
+  if (statusPill) {
+    statusPill.style.display = "inline-block";
+    statusPill.textContent = "Checking...";
+    statusPill.className = "pill pill-starting";
+  }
+
+  try {
+    const res = await fetch("/api/agent/port_check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        port: device,
+        mode: transport,
+        udp_port: parseInt(port, 10) || 8888
+      }),
+    }).then(r => r.json());
+
+    if (statusPill) {
+      if (res.in_use) {
+        statusPill.textContent = "Port Busy";
+        statusPill.className = "pill pill-warn";
+      } else {
+        statusPill.textContent = "Port Available";
+        statusPill.className = "pill pill-ok";
+      }
+    }
+
+    if (res.in_use && !opts.silent) {
+      document.getElementById("port-conflict-summary").textContent = res.summary || "Port is currently in use";
+      document.getElementById("port-conflict-details").textContent = res.details || JSON.stringify(res, null, 2);
+      document.getElementById("port-modal-overlay").classList.add("open");
+    }
+    return res;
+  } catch (err) {
+    if (statusPill) {
+      statusPill.textContent = "Check Failed";
+      statusPill.className = "pill pill-off";
+    }
+    return { in_use: false, error: err.message };
+  }
+}
+
+async function releaseAgentPort() {
+  const c = state.config || {};
+  const transport = document.getElementById("cfg-agent-transport")?.value || c.agent_transport || "serial";
+  const device = document.getElementById("cfg-agent-device")?.value || c.agent_device || "/dev/ttyACM0";
+  const port = document.getElementById("cfg-agent-port")?.value || c.agent_port || "8888";
+
+  const btnRel = document.getElementById("btn-release-port-conflict");
+  if (btnRel) {
+    btnRel.disabled = true;
+    btnRel.textContent = "Releasing...";
+  }
+
+  try {
+    const res = await fetch("/api/agent/port_release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        port: device,
+        mode: transport,
+        udp_port: parseInt(port, 10) || 8888
+      }),
+    }).then(r => r.json());
+
+    document.getElementById("port-modal-overlay").classList.remove("open");
+    await checkAgentPortStatus({ silent: true });
+    logLine("[console] micro-ROS agent port released successfully.");
+  } catch (err) {
+    alert("Failed to release port: " + err.message);
+  } finally {
+    if (btnRel) {
+      btnRel.disabled = false;
+      btnRel.textContent = "⚡ Release Port & Stop Agent";
+    }
+  }
+}
+
+document.getElementById("btn-agent-port-check")?.addEventListener("click", () => checkAgentPortStatus());
+document.getElementById("hdr-btn-agent-check")?.addEventListener("click", () => checkAgentPortStatus());
+document.getElementById("btn-close-port-modal")?.addEventListener("click", () => {
+  document.getElementById("port-modal-overlay")?.classList.remove("open");
+});
+document.getElementById("btn-ignore-port-conflict")?.addEventListener("click", () => {
+  document.getElementById("port-modal-overlay")?.classList.remove("open");
+});
+document.getElementById("btn-release-port-conflict")?.addEventListener("click", () => releaseAgentPort());

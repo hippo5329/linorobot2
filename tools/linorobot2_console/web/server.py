@@ -1331,6 +1331,256 @@ def bringup_externally_alive():
 
 
 
+
+
+def _parse_port_check_output(output, port, mode, udp_port, res):
+    fuser_section = ""
+    container_section = ""
+    process_section = ""
+
+    current_sec = None
+    for line in output.splitlines():
+        line_s = line.strip()
+        if line_s == "---FUSER---":
+            current_sec = "fuser"
+            continue
+        elif line_s == "---CONTAINERS---":
+            current_sec = "containers"
+            continue
+        elif line_s == "---PROCESSES---":
+            current_sec = "processes"
+            continue
+
+        if current_sec == "fuser":
+            fuser_section += line + " "
+        elif current_sec == "containers":
+            container_section += line + chr(10)
+        elif current_sec == "processes":
+            process_section += line + chr(10)
+
+    port_basename = os.path.basename(port) if mode != "udp" else str(udp_port)
+    for line in container_section.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        cid = parts[0]
+        cname = parts[1] if len(parts) > 1 else ""
+        cimg = parts[2] if len(parts) > 2 else ""
+        ccmd = parts[3] if len(parts) > 3 else ""
+
+        is_cont_target = False
+        if mode == "udp":
+            if f":{udp_port}" in ccmd or f"--port {udp_port}" in ccmd or f"{udp_port}/udp" in line or (("microros" in cimg or "uros" in cname) and "udp" in ccmd):
+                is_cont_target = True
+        else:
+            if port in ccmd or port_basename in ccmd or "microros" in cimg or "uros_agent" in cname or "microros_agent" in cname or "uros" in cname:
+                is_cont_target = True
+
+        if is_cont_target:
+            res["in_use"] = True
+            res["holder_type"] = "container"
+            res["container_id"] = cid
+            res["container_name"] = cname
+            res["is_microros"] = "microros" in cimg or "uros" in cname or "micro_ros" in ccmd
+            res["details"] = f"Container '{cname}' ({cid[:12]}): {cimg}"
+            res["summary"] = f"Occupied by container '{cname}' ({cid[:8]})"
+            return res
+
+    raw_pids = [p for p in fuser_section.replace(":", " ").split() if p.isdigit()]
+    if raw_pids:
+        res["in_use"] = True
+        res["pids"] = raw_pids
+        res["holder_type"] = "process"
+        if "micro_ros_agent" in process_section:
+            res["is_microros"] = True
+            res["process_names"] = ["micro_ros_agent"]
+            res["summary"] = f"In use by micro_ros_agent (PID {raw_pids[0]})"
+        else:
+            res["summary"] = f"Port in use by PID {raw_pids[0]}"
+        res["details"] = f"PIDs: {raw_pids}"
+        return res
+
+    if mode == "udp" and str(udp_port) in process_section:
+        res["in_use"] = True
+        res["holder_type"] = "socket"
+        res["summary"] = f"UDP socket :{udp_port} in use"
+        return res
+
+    if mode != "udp" and "micro_ros_agent" in process_section and (port in process_section or port_basename in process_section):
+        res["in_use"] = True
+        res["holder_type"] = "process"
+        res["is_microros"] = True
+        res["summary"] = f"micro_ros_agent active on {port}"
+        res["details"] = process_section.strip()
+        return res
+
+    return res
+
+
+def check_agent_port_status(port="/dev/ttyUSB0", mode="serial", udp_port=8888, host=None, user=None):
+    res = {
+        "status": "ok",
+        "in_use": False,
+        "mode": mode,
+        "target": port if mode in ["serial", "multiserial"] else f"UDP:{udp_port}",
+        "holder_type": "none",
+        "pids": [],
+        "process_names": [],
+        "container_id": "",
+        "container_name": "",
+        "is_microros": False,
+        "details": "",
+        "summary": "Port is available"
+    }
+
+    if host:
+        ssh_cmd = [
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4",
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            f"{user}@{host}" if user else host
+        ]
+        if mode in ["serial", "multiserial"]:
+            script = (
+                f"echo '---FUSER---'; fuser '{port}' 2>/dev/null || true; "
+                f"echo '---CONTAINERS---'; "
+                f"docker ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"podman ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"echo '---PROCESSES---'; "
+                f"pgrep -fa 'micro_ros_agent' 2>/dev/null || true"
+            )
+        else:
+            script = (
+                f"echo '---FUSER---'; fuser '{udp_port}/udp' 2>/dev/null || true; "
+                f"echo '---CONTAINERS---'; "
+                f"docker ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"podman ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"echo '---PROCESSES---'; "
+                f"ss -ulnp 'sport = :{udp_port}' 2>/dev/null || true"
+            )
+        try:
+            r = subprocess.run(ssh_cmd + [script], capture_output=True, text=True, timeout=8)
+            output = r.stdout
+        except Exception as e:
+            res["status"] = "error"
+            res["details"] = f"SSH error: {e}"
+            return res
+        return _parse_port_check_output(output, port, mode, udp_port, res)
+
+    # Local port checks
+    output_parts = []
+    if mode in ["serial", "multiserial"]:
+        output_parts.append("---FUSER---")
+        if os.path.exists(port):
+            try:
+                f = subprocess.run(["fuser", port], capture_output=True, text=True, timeout=2)
+                output_parts.append(f.stdout)
+            except Exception:
+                pass
+        output_parts.append("---CONTAINERS---")
+        try:
+            d = subprocess.run(["docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            output_parts.append(d.stdout)
+        except Exception:
+            pass
+        try:
+            p = subprocess.run(["podman", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            output_parts.append(p.stdout)
+        except Exception:
+            pass
+        output_parts.append("---PROCESSES---")
+        try:
+            pr = subprocess.run(["pgrep", "-fa", "micro_ros_agent"], capture_output=True, text=True, timeout=2)
+            output_parts.append(pr.stdout)
+        except Exception:
+            pass
+    else:
+        output_parts.append("---FUSER---")
+        try:
+            f = subprocess.run(["fuser", f"{udp_port}/udp"], capture_output=True, text=True, timeout=2)
+            output_parts.append(f.stdout)
+        except Exception:
+            pass
+        output_parts.append("---CONTAINERS---")
+        try:
+            d = subprocess.run(["docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            output_parts.append(d.stdout)
+        except Exception:
+            pass
+        try:
+            p = subprocess.run(["podman", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            output_parts.append(p.stdout)
+        except Exception:
+            pass
+        output_parts.append("---PROCESSES---")
+        try:
+            pr = subprocess.run(["ss", "-ulnp", f"sport = :{udp_port}"], capture_output=True, text=True, timeout=2)
+            output_parts.append(pr.stdout)
+        except Exception:
+            pass
+
+    return _parse_port_check_output("\n".join(output_parts), port, mode, udp_port, res)
+
+
+def release_agent_port(port="/dev/ttyUSB0", mode="serial", udp_port=8888, host=None, user=None):
+    if host:
+        ssh_cmd = [
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4",
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+            f"{user}@{host}" if user else host
+        ]
+        if mode == "udp":
+            script = (
+                f"docker stop microros_agent uros_agent_udp 2>/dev/null || true; "
+                f"podman stop microros_agent uros_agent_udp 2>/dev/null || true; "
+                f"fuser -k -TERM {udp_port}/udp 2>/dev/null || true; "
+                f"pkill -f 'micro_ros_agent.*udp' 2>/dev/null || true; "
+                f"sleep 0.5"
+            )
+        else:
+            port_base = os.path.basename(port)
+            script = (
+                f"docker stop microros_agent uros_agent_serial 2>/dev/null || true; "
+                f"podman stop microros_agent uros_agent_serial 2>/dev/null || true; "
+                f"[ -e '{port}' ] && fuser -k -TERM '{port}' 2>/dev/null || true; "
+                f"pkill -f '[m]icro_ros_agent.*{port_base}' 2>/dev/null || true; "
+                f"sleep 0.5"
+            )
+        try:
+            r = subprocess.run(ssh_cmd + [script], capture_output=True, text=True, timeout=10)
+            return {"status": "ok", "released": True, "output": r.stdout}
+        except Exception as e:
+            return {"status": "error", "released": False, "error": str(e)}
+
+    # Local release
+    res = {"status": "ok", "released": True, "actions": []}
+    if mode == "udp":
+        subprocess.run(["fuser", "-k", "-TERM", f"{udp_port}/udp"], capture_output=True, text=True)
+        subprocess.run(["pkill", "-f", "micro_ros_agent.*udp"], capture_output=True, text=True)
+        for engine in ["docker", "podman"]:
+            try:
+                subprocess.run([engine, "stop", "microros_agent", "uros_agent_udp"], capture_output=True, text=True)
+            except Exception:
+                pass
+    else:
+        port_base = os.path.basename(port)
+        if os.path.exists(port):
+            subprocess.run(["fuser", "-k", "-TERM", port], capture_output=True, text=True)
+            res["actions"].append(f"fuser -k on {port}")
+        subprocess.run(["pkill", "-f", f"[m]icro_ros_agent.*{port_base}"], capture_output=True, text=True)
+        for engine in ["docker", "podman"]:
+            try:
+                d = subprocess.run([engine, "ps", "-q", "--filter", "ancestor=microros/micro-ros-agent"], capture_output=True, text=True)
+                for cid in d.stdout.split():
+                    subprocess.run([engine, "stop", cid], capture_output=True, text=True)
+                    res["actions"].append(f"stopped container {cid}")
+            except Exception:
+                pass
+    import time
+    time.sleep(0.5)
+    return res
+
+
 def generate_custom_robot_specs(description):
     d = description.lower()
     
@@ -1577,6 +1827,17 @@ class Handler(BaseHTTPRequestHandler):
             req_distro = query_params.get("distro") or detect_ros_distro()
             req_base = query_params.get("base") or "2wd"
             self._send_json(get_unified_config(distro=req_distro, base=req_base))
+            return
+
+        if path == "/api/agent/port_check":
+            qs = parse_qs(parsed.query)
+            port = qs.get("port", ["/dev/ttyUSB0"])[0]
+            mode = qs.get("mode", ["serial"])[0]
+            udp_port = int(qs.get("udp_port", [8888])[0])
+            host = qs.get("host", [""])[0]
+            user = qs.get("user", ["ubuntu"])[0]
+            res = check_agent_port_status(port, mode, udp_port, host=host if host else None, user=user)
+            self._send_json(res)
             return
 
         if path == "/api/status":
@@ -1868,6 +2129,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/agent/exec":
             command = data.get("command", "")
             self._stream_command(command, agent_runner)
+            return
+
+        if path == "/api/agent/port_check":
+            port = data.get("port", "/dev/ttyUSB0")
+            mode = data.get("mode", "serial")
+            udp_port = int(data.get("udp_port", 8888))
+            host = data.get("host", "")
+            user = data.get("user", "ubuntu")
+            res = check_agent_port_status(port, mode, udp_port, host=host if host else None, user=user)
+            self._send_json(res)
+            return
+
+        if path == "/api/agent/port_release":
+            port = data.get("port", "/dev/ttyUSB0")
+            mode = data.get("mode", "serial")
+            udp_port = int(data.get("udp_port", 8888))
+            host = data.get("host", "")
+            user = data.get("user", "ubuntu")
+            res = release_agent_port(port, mode, udp_port, host=host if host else None, user=user)
+            self._send_json(res)
             return
 
         if path == "/api/agent/kill":
