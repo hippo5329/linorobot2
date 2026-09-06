@@ -27,7 +27,7 @@ with sync_playwright() as p:
        [o.get_attribute("value") for o in pg.query_selector_all("#hdr-distro-select option")]
        == ["jazzy", "lyrical", "rolling"])
 
-    tabs = ["install", "bringup", "teleop", "slam-nav", "calibration", "lidar", "firmware", "settings"]
+    tabs = ["install", "bringup", "teleop", "slam-nav", "calibration", "lidar", "settings"]
     for t in tabs:
         pg.click(f'button.tab-btn[data-tab="{t}"]')
         pg.wait_for_timeout(120)
@@ -64,14 +64,14 @@ with sync_playwright() as p:
     ok("AI tune returns a diagnosis", "overshoot" in diag.lower() or "brak" in diag.lower(), diag[:90])
 
     # pickers (condensed)
-    pg.click('button.tab-btn[data-tab="firmware"]')
-    pg.click('.pick-btn[data-target="fw-hardware-path"]')
+    pg.click('button.tab-btn[data-tab="install"]')
+    pg.click('.pick-btn[data-target="install-workspace"]')
     pg.wait_for_selector("#picker-overlay.open", timeout=4000)
     pg.wait_for_timeout(400)
     ok("path picker opens + lists", len(pg.query_selector_all("#picker-list .pk-row")) >= 1)
     pg.click("#picker-use")
     pg.wait_for_function("!document.querySelector('#picker-overlay').classList.contains('open')")
-    ok("path picker filled fw-hardware-path", pg.input_value("#fw-hardware-path").startswith("/"))
+    ok("path picker filled install-workspace", pg.input_value("#install-workspace").startswith("/"))
 
     pg.click('button.tab-btn[data-tab="settings"]')
     pg.click('.pick-btn[data-target="cfg-agent-device"]')

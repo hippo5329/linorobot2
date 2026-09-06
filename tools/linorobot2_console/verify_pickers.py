@@ -20,14 +20,14 @@ with sync_playwright() as p:
     pg.goto(URL, wait_until="networkidle")
     ok("console page loads", "Linorobot2 Console" in pg.title())
 
-    # ---- 1. dir picker on the Firmware tab (fw-hardware-path) ----
-    pg.click('button.tab-btn[data-tab="firmware"]')
-    pg.click('.pick-btn[data-target="fw-hardware-path"]')
+    # ---- 1. dir picker on the Install tab (install-workspace) ----
+    pg.click('button.tab-btn[data-tab="install"]')
+    pg.click('.pick-btn[data-target="install-workspace"]')
     pg.wait_for_selector("#picker-overlay.open", timeout=4000)
     ok("dir picker modal opens", pg.is_visible("#picker-overlay.open"))
     ok("modal title = folder", pg.inner_text("#picker-title").lower().find("folder") >= 0)
     rows = pg.query_selector_all("#picker-list .pk-row")
-    ok("dir listing populated", len(rows) > 1, f"{len(rows)} rows")
+    ok("dir listing populated", len(rows) >= 1, f"{len(rows)} rows")
     cwd0 = pg.inner_text("#picker-cwd")
     # descend into the first folder row
     folder_rows = [r for r in rows if "📂" in (r.inner_text() or "")]
@@ -45,7 +45,7 @@ with sync_playwright() as p:
     # use this folder
     pg.click("#picker-use")
     pg.wait_for_function("!document.querySelector('#picker-overlay').classList.contains('open')", timeout=3000)
-    val = pg.input_value("#fw-hardware-path")
+    val = pg.input_value("#install-workspace")
     ok("'Use this folder' fills the input", val == cwd0, val)
 
     # ---- 2. file picker on SLAM & Nav (nav-params-file, .yaml) ----

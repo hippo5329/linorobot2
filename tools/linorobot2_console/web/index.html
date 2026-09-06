@@ -37,7 +37,6 @@
   <button class="tab-btn" data-tab="slam-nav">SLAM &amp; Nav</button>
   <button class="tab-btn" data-tab="calibration">Calibration</button>
   <button class="tab-btn" data-tab="lidar">Sensors / LiDAR</button>
-  <button class="tab-btn" data-tab="firmware">Firmware (Docker)</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
 </nav>
 
@@ -47,7 +46,7 @@
   <section class="tab-pane active" id="tab-install">
     <div class="card">
       <h2>Robot Configuration Profile (Single Source of Truth)</h2>
-      <p class="hint">Import or export your complete robot profile via <b><code>robot_config.yaml</code></b>. Holds robot kinematics, LiDAR, depth camera, micro-ROS agent, EKF sensor fusion, and Nav2 navigation stack in one single file.</p>
+      <p class="hint">Import or export your complete robot profile via <b><code>robot_config.yaml</code></b>. Holds robot kinematics, LiDAR, depth camera, micro-ROS agent, EKF sensor fusion, and Nav2 navigation stack in one single file. Microcontroller firmware, pinouts, and flashing are managed in <code>linorobot2_hardware</code>; simply import your generated <code>custom_config.h</code> or <code>robot_config.yaml</code> below.</p>
       <div class="row">
         <input type="text" id="import-path" placeholder="/path/to/robot_config.yaml or custom_config.h">
         <button type="button" class="btn pick-btn" data-pick="file" data-exts="yaml,yml,h" data-target="import-path">&#128193;</button>
@@ -630,49 +629,6 @@
       <button id="btn-lidar-start" class="btn btn-primary">Start</button>
       <button id="btn-lidar-stop" class="btn btn-danger" disabled>Stop</button>
       <canvas id="lidar-canvas" width="480" height="480"></canvas>
-    </div>
-  </section>
-
-  <!-- FIRMWARE (launches config-engine, doesn't reimplement it) -->
-  <section class="tab-pane" id="tab-firmware">
-    <div class="card">
-      <h2>Configure, build, and flash firmware (robot_config_engine)</h2>
-      <p class="hint">linorobot2 and linorobot2_hardware stay separate repos with separate
-        concerns -- Console doesn't reimplement any board/PlatformIO/flashing knowledge.
-        <code>linorobot2_hardware</code>'s own <b>robot_config_engine</b> ("config-engine")
-        already does board detection, header generation, PlatformIO build, and flashing, so
-        this just launches config-engine itself inside a Docker container (so PlatformIO/board
-        toolchains don't need to be installed anywhere either) and hands you a link to its real
-        web UI. Everything past that point happens in config-engine's own interface.</p>
-      <div class="row">
-        <label class="checkbox-label">
-          <input type="checkbox" id="fw-use-docker" checked>
-          <span>Run config-engine inside Docker container (uncheck for native host/remote Python execution)</span>
-        </label>
-      </div>
-      <div class="row">
-        <label>linorobot2_hardware path
-          <input type="text" id="fw-hardware-path" placeholder="~/linorobot2_hardware">
-          <button type="button" class="btn pick-btn" data-pick="dir" data-target="fw-hardware-path">&#128193;</button>
-        </label>
-        <label>config-engine port <input type="text" id="fw-port" value="8085"></label>
-        <label>Board device (for USB passthrough) <input type="text" id="fw-upload-port" value="" placeholder="(blank = no board yet)"></label>
-        <button type="button" class="btn pick-btn" data-pick="serial" data-target="fw-upload-port">&#128268; ports</button>
-      </div>
-      <div class="row">
-        <label>Run on (optional, e.g. user@robot-computer)
-          <input type="text" id="fw-remote-host" placeholder="(blank = this machine)">
-        </label>
-      </div>
-      <p class="hint">The board has to be physically attached to wherever the container actually
-        runs -- leave "Run on" blank to launch it here, or set it to launch (over SSH) on the
-        machine the board is plugged into instead, e.g. if you're driving Console from a laptop
-        but the board is on a separate headless robot computer. Uses <code>docker</code>
-        specifically (not Podman) -- keep to one container engine per workflow, since they don't
-        share image storage.</p>
-      <button id="btn-fw-start" class="btn btn-primary">Launch config-engine</button>
-      <button id="btn-fw-stop" class="btn btn-danger" disabled>Stop</button>
-      <a id="fw-link" class="hint" href="#" target="_blank" style="display:none">Open config-engine &rarr;</a>
     </div>
   </section>
 
