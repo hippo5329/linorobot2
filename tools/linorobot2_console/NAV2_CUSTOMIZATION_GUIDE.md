@@ -138,8 +138,8 @@ The `collision_monitor` (a fast safety loop) is deliberately kept LiDAR-only.
 **Gating.** An `observation_sources` entry whose topic never publishes just logs
 a periodic "observation buffer has not been updated" warning — harmless but
 noisy on a robot with no depth camera. The **console's own launcher**
-(`tools/linorobot2_console/launch_nav2.py`) handles this; upstream
-`navigation.launch.py` is not modified. `launch_nav2.py` takes a `depth_costmap`
+(`tools/linorobot2_console/launch_nav2.py`, self-contained — it includes
+`nav2_bringup/bringup_launch.py` directly) handles this via a `depth_costmap`
 argument —
 
 | `depth_costmap:=` | effect |
@@ -178,22 +178,28 @@ The official Nav2 documentation recommends RPP for robust path tracking with vel
 
 ---
 
-## 5. Unified Navigation & SLAM Launch Pipeline
+## 5. Console Launch Pipeline
 
-In Linorobot2, `navigation.launch.py` and `slam.launch.py` are unified into a single architecture:
+The console drives navigation and SLAM through its **own** launcher,
+`tools/linorobot2_console/launch_nav2.py` — a single `OpaqueFunction` that
+resolves the per-distro console params (`console_nav2_<distro>.yaml` →
+`config/nav2_<distro>[_mecanum].yaml`), applies the depth→costmap gate, and
+then includes **`nav2_bringup/bringup_launch.py`** directly plus an RViz node.
+It does not depend on `linorobot2_navigation`'s own launch files, and it
+never modifies upstream code.
 
 ```bash
-# Autonomous Navigation (with an existing map)
-ros2 launch linorobot2_navigation navigation.launch.py \
-  distro:=jazzy base:=mecanum map:=/path/to/my_map.yaml
+# one `slam:=` arg switches SLAM mapping vs AMCL navigation
+ros2 launch tools/linorobot2_console/launch_nav2.py \
+  distro:=jazzy base:=mecanum map:=/path/to/my_map.yaml            # AMCL nav
 
-# SLAM Mapping (generates map live without AMCL)
-ros2 launch linorobot2_navigation navigation.launch.py \
-  distro:=jazzy base:=mecanum slam:=true
+ros2 launch tools/linorobot2_console/launch_nav2.py \
+  distro:=jazzy base:=mecanum slam:=true                           # SLAM mapping
 ```
 
-> [!NOTE]
-> `slam.launch.py` is an alias into `navigation.launch.py slam:=true`.
+For SLAM the console concatenates its nav2 params + `slam.yaml` into one temp
+file (they're disjoint top-level mappings) since `bringup_launch.py` feeds a
+single `params_file` to both slam_toolbox and the nav2 stack.
 
 ---
 

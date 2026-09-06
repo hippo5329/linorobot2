@@ -74,6 +74,12 @@ m.generate_launch_description()
 PY
   done
   grep -q depth_costmap "$REPO/linorobot2_navigation/launch/navigation.launch.py" && no "upstream navigation.launch.py must NOT have depth_costmap" || ok "upstream launcher untouched (no depth_costmap)"
+  grep -qE "FindPackageShare\(.linorobot2_navigation.\), .launch." "$REPO/tools/linorobot2_console/launch_nav2.py" \
+    && no "launch_nav2.py still includes the linorobot2_navigation launch file" \
+    || ok "launch_nav2.py decoupled (no linorobot2_navigation launch include)"
+  grep -q "nav2_bringup.), .launch., .bringup_launch.py" "$REPO/tools/linorobot2_console/launch_nav2.py" \
+    && ok "launch_nav2.py includes nav2_bringup/bringup_launch.py directly" \
+    || no "launch_nav2.py should include nav2_bringup/bringup_launch.py"
 else
   echo "  SKIP  no launch/launch_ros in this env"
 fi

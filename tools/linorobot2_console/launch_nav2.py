@@ -19,7 +19,7 @@ import sys
 import tempfile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch_ros.substitutions import FindPackageShare
@@ -51,13 +51,12 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
         else:
             selected_params = os.path.join(console_dir, 'web', 'console_nav2_params.yaml')
 
-    # Depth camera -> costmap gating (Console-side; upstream navigation.launch.py
-    # is left untouched -- we resolve it here and hand it a finished params
-    # file). The shipped configs list `observation_sources: scan pointcloud`;
-    # when there is no depth camera we pass a copy with `pointcloud` dropped
-    # (its inert `pointcloud:` block stays). 'auto' = on iff
-    # LINOROBOT2_DEPTH_SENSOR is set (the same env var linorobot2_bringup uses).
-    # Same transform as tools/linorobot2_console/patcher.py:patch_costmap_sources.
+    # Depth camera -> costmap gating (Console-side). The console's config
+    # templates list `observation_sources: scan pointcloud`; when there is no
+    # depth camera we pass a copy with `pointcloud` dropped (its inert
+    # `pointcloud:` block stays). 'auto' = on iff LINOROBOT2_DEPTH_SENSOR is
+    # set (the same env var linorobot2_bringup uses). Same transform as
+    # tools/linorobot2_console/patcher.py:patch_costmap_sources.
     depth_arg = context.launch_configurations.get('depth_costmap', 'auto').strip().lower()
     if depth_arg in ('', 'auto'):
         depth_enabled = bool(os.environ.get('LINOROBOT2_DEPTH_SENSOR', '').strip())
@@ -96,38 +95,75 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
         else:
             selected_slam_params = ''
 
-    nav_launch_path = PathJoinSubstitution(
-        [FindPackageShare('linorobot2_navigation'), 'launch', 'navigation.launch.py']
-    )
+    # SLAM mode: nav2_bringup/bringup_launch.py feeds one `params_file` to BOTH
+    # slam_toolbox and the nav2 stack, so concatenate the two console param
+    # docs (disjoint top-level mappings -- `slam_toolbox:` vs `amcl:` / ... --
+    # so plain text concat is valid YAML).
+    bringup_params = selected_params
+    if is_slam and selected_slam_params and os.path.exists(selected_slam_params):
+        try:
+            with open(selected_params) as f:
+                nav_txt = f.read()
+            with open(selected_slam_params) as f:
+                slam_txt = f.read()
+            tmp = tempfile.NamedTemporaryFile(
+                mode='w', prefix='console_slamnav_', suffix='.yaml', delete=False)
+            tmp.write(nav_txt.rstrip() + "\n\n" + slam_txt)
+            tmp.close()
+            bringup_params = tmp.name
+        except OSError:
+            pass
+
+    # Self-contained: pull in nav2_bringup's own bringup_launch.py (a stock
+    # ROS 2 package) directly + an RViz node -- no include of the
+    # linorobot2_navigation package launch file.
+    nav2_bringup_launch = os.path.join(
+        FindPackageShare('nav2_bringup').find('nav2_bringup'), 'launch', 'bringup_launch.py')
+
+    rviz_args = []
+    try:
+        nav_pkg = FindPackageShare('linorobot2_navigation').find('linorobot2_navigation')
+        rviz_cfg = os.path.join(
+            nav_pkg, 'rviz',
+            'linorobot2_slam.rviz' if is_slam else 'linorobot2_navigation.rviz')
+        if os.path.exists(rviz_cfg):
+            rviz_args = ['-d', rviz_cfg]
+    except Exception:
+        pass
 
     mode_str = "SLAM Mapping" if is_slam else "AMCL Navigation"
     return [
         LogInfo(msg=f"[Linorobot2 Console] Launching {mode_str} (distro: '{distro}', base: '{base}') "
-                    f"with Nav2: '{selected_params}' | depth->costmap: {depth_note}"),
+                    f"via nav2_bringup | params: '{bringup_params}' | depth->costmap: {depth_note}"),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(nav_launch_path),
+            PythonLaunchDescriptionSource(nav2_bringup_launch),
             launch_arguments={
-                'slam': 'true' if is_slam else 'false',
-                'distro': distro,
-                'base': base,
-                'params_file': selected_params,
-                'slam_params_file': selected_slam_params,
-                'map': LaunchConfiguration('map'),
-                'sim': LaunchConfiguration('sim'),
-                'rviz': LaunchConfiguration('rviz'),
+                'slam': 'True' if is_slam else 'False',
+                'map': '' if is_slam else LaunchConfiguration('map'),
+                'use_sim_time': LaunchConfiguration('sim'),
+                'params_file': bringup_params,
                 'autostart': LaunchConfiguration('autostart'),
-                'initial_pose_x': LaunchConfiguration('initial_pose_x'),
-                'initial_pose_y': LaunchConfiguration('initial_pose_y'),
-                'initial_pose_yaw': LaunchConfiguration('initial_pose_yaw')
             }.items()
-        )
+        ),
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            output='screen',
+            arguments=rviz_args,
+            condition=IfCondition(LaunchConfiguration('rviz')),
+            parameters=[{'use_sim_time': LaunchConfiguration('sim')}],
+        ),
     ]
 
 
 def generate_launch_description():
-    default_map_path = PathJoinSubstitution(
-        [FindPackageShare('linorobot2_navigation'), 'maps', 'turtlebot3_world.yaml']
-    )
+    try:
+        default_map_path = os.path.join(
+            FindPackageShare('linorobot2_navigation').find('linorobot2_navigation'),
+            'maps', 'turtlebot3_world.yaml')
+    except Exception:
+        default_map_path = ''
 
     return LaunchDescription([
         DeclareLaunchArgument(
