@@ -15,6 +15,15 @@ const consolePane = document.getElementById("console-pane");
 const consoleTitle = document.getElementById("console-title");
 const consoleWrap = document.getElementById("console-wrap");
 
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function logLine(text) {
   consolePane.textContent += text + "\n";
   consolePane.scrollTop = consolePane.scrollHeight;
@@ -717,11 +726,38 @@ async function ensureBringupRunning() {
       pill.className = "pill pill-starting";
     }
 
-    setTimeout(() => {
-      refreshStatus();
-      logLine("[console] Robot Bringup initialized. Proceeding with requested action...");
-      resolve();
-    }, 3500);
+    // Poll for the bringup process to actually appear rather than assuming a
+    // fixed delay is enough. Resolves as soon as the server reports bringup
+    // alive (our runner or an external process), waits a short settle, and
+    // gives up after a bounded timeout so a stuck launch can't hang the caller.
+    // NOTE: this confirms the *process* is up, not that /odom and TF are
+    // flowing -- a topic-level readiness check is the deeper fix.
+    const startedAt = Date.now();
+    const DEADLINE_MS = 40000;
+    const poll = async () => {
+      let alive = false;
+      try {
+        const s = await fetch("/api/status").then((r) => r.json());
+        state.status = s;
+        alive = Boolean(s.bringup_alive_external || s.bringup_busy_console);
+      } catch (e) {
+        /* keep polling */
+      }
+      const waited = Date.now() - startedAt;
+      if (alive || waited >= DEADLINE_MS) {
+        refreshStatus();
+        logLine(
+          alive
+            ? `[console] Robot Bringup detected after ${(waited / 1000).toFixed(1)}s. Proceeding with requested action...`
+            : `[console] Bringup not confirmed after ${(DEADLINE_MS / 1000)}s -- proceeding anyway.`
+        );
+        // brief settle so nodes/agent finish binding before the caller launches
+        setTimeout(resolve, 2000);
+        return;
+      }
+      setTimeout(poll, 1000);
+    };
+    setTimeout(poll, 1200);
   });
 }
 
@@ -1354,6 +1390,8 @@ if (btnAiTuneApply) {
     if (aiTuneStatus) aiTuneStatus.textContent = "Applying patches...";
     try {
       const distro = currentRosDistro();
+      const base = currentAiTuningAnalysis.target_base
+        || document.getElementById("tune-base-type")?.value || "2wd";
       const res = await fetch("/api/ai/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1361,6 +1399,7 @@ if (btnAiTuneApply) {
           nav2_patch: currentAiTuningAnalysis.nav2_patch,
           ekf_patch: currentAiTuningAnalysis.ekf_patch,
           slam_patch: currentAiTuningAnalysis.slam_patch,
+          base,
           distro,
         }),
       });

@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -349,6 +349,22 @@ def analyze_robotics_ai(prompt, base="2wd", distro="jazzy", model=None):
         "ekf_patch": ekf_patch,
         "slam_patch": slam_patch
     }
+
+
+# Turn a sparse patch/preset/spec dict into patch_nav2_text / patch_ekf_text
+# kwargs (dropping absent keys) so a targeted fix leaves untouched keys alone.
+# Canonical key lists live in patcher.py; fall back to no-op if patcher failed
+# to import so the server still starts.
+if patcher:
+    _nav2_kwargs = patcher.nav2_kwargs
+    _ekf_kwargs = patcher.ekf_kwargs
+else:  # pragma: no cover - only when patcher.py is unavailable
+    def _nav2_kwargs(src):
+        return {}
+
+    def _ekf_kwargs(src, base=None):
+        return {}
+
 
 DEFAULT_CONFIG = {
     "workspace_path": os.path.expanduser("~/linorobot2_ws"),
@@ -893,7 +909,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/nav2_config":
-            query_params = dict(q.split("=") for q in parsed.query.split("&") if "=" in q)
+            query_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             requested_distro = query_params.get("distro") or detect_ros_distro()
             requested_base = query_params.get("base") or "2wd"
             cfg_path = get_nav2_config_path(requested_distro)
@@ -909,7 +925,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/ekf_config":
-            query_params = dict(q.split("=") for q in parsed.query.split("&") if "=" in q)
+            query_params = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             requested_base = query_params.get("base") or "2wd"
             cfg_path = get_ekf_config_path()
             self._send_json({
@@ -1139,30 +1155,7 @@ class Handler(BaseHTTPRequestHandler):
             current_cfg = get_nav2_config(distro)
             if patcher:
                 patched_cfg = patcher.patch_nav2_text(
-                    current_cfg,
-                    base_type=base,
-                    max_vel_x=data.get("max_vel_x", 0.5),
-                    max_vel_y=data.get("max_vel_y"),
-                    max_vel_theta=data.get("max_vel_theta", 2.5),
-                    max_accel_x=data.get("max_accel_x", 2.5),
-                    max_accel_y=data.get("max_accel_y"),
-                    max_accel_theta=data.get("max_accel_theta", 3.2),
-                    desired_linear_vel=data.get("desired_linear_vel"),
-                    inflation_radius=data.get("inflation_radius"),
-                    cost_scaling_factor=data.get("cost_scaling_factor"),
-                    max_decel_x=data.get("max_decel_x"),
-                    max_decel_theta=data.get("max_decel_theta"),
-                    xy_goal_tolerance=data.get("xy_goal_tolerance"),
-                    yaw_goal_tolerance=data.get("yaw_goal_tolerance"),
-                    lookahead_dist=data.get("lookahead_dist"),
-                    approach_velocity_scaling_dist=data.get("approach_velocity_scaling_dist"),
-                    movement_time_allowance=data.get("movement_time_allowance"),
-                    required_movement_radius=data.get("required_movement_radius"),
-                    rotate_to_heading_angular_vel=data.get("rotate_to_heading_angular_vel"),
-                    angular_dist_threshold=data.get("angular_dist_threshold"),
-                    symmetric_yaw_tolerance=data.get("symmetric_yaw_tolerance"),
-                    raytrace_range=data.get("raytrace_range"),
-                    obstacle_max_range=data.get("obstacle_max_range")
+                    current_cfg, **_nav2_kwargs(dict(data, base_type=base))
                 )
             else:
                 patched_cfg = current_cfg
@@ -1183,14 +1176,7 @@ class Handler(BaseHTTPRequestHandler):
             base = data.get("base") or "2wd"
             current_cfg = get_ekf_config(base)
             if patcher:
-                patched_cfg = patcher.patch_ekf_text(
-                    current_cfg,
-                    base_type=base,
-                    frequency=data.get("frequency", 50.0),
-                    two_d_mode=data.get("two_d_mode", True),
-                    fuse_vy=data.get("fuse_vy"),
-                    fuse_imu_yaw=data.get("fuse_imu_yaw", False)
-                )
+                patched_cfg = patcher.patch_ekf_text(current_cfg, **_ekf_kwargs(data, base=base))
             else:
                 patched_cfg = current_cfg
             saved_path = save_ekf_config(patched_cfg)
@@ -1254,20 +1240,9 @@ class Handler(BaseHTTPRequestHandler):
             distro = data.get("distro") or detect_ros_distro()
             base = pinfo["base"]
 
-            # 1. Patch Nav2
+            # 1. Patch Nav2 -- forward every tuning key the preset actually carries
             nav2_in = get_nav2_config(distro)
-            nav2_out = patcher.patch_nav2_text(
-                nav2_in,
-                base_type=base,
-                max_vel_x=pinfo["max_vel_x"],
-                max_vel_y=pinfo["max_vel_y"],
-                max_vel_theta=pinfo["max_vel_theta"],
-                max_accel_x=pinfo["max_accel_x"],
-                max_accel_y=pinfo["max_accel_y"],
-                max_accel_theta=pinfo["max_accel_theta"],
-                inflation_radius=pinfo.get("inflation_radius"),
-                cost_scaling_factor=pinfo.get("cost_scaling_factor")
-            )
+            nav2_out = patcher.patch_nav2_text(nav2_in, **_nav2_kwargs(pinfo))
             save_nav2_config(nav2_out, distro)
 
             # 2. Patch EKF
@@ -1277,7 +1252,7 @@ class Handler(BaseHTTPRequestHandler):
                 base_type=base,
                 frequency=pinfo["ekf_frequency"],
                 fuse_vy=pinfo["fuse_vy"],
-                fuse_imu_yaw=pinfo["fuse_imu_yaw"]
+                fuse_imu_yaw=pinfo["fuse_imu_yaw"],
             )
             save_ekf_config(ekf_out)
 
@@ -1315,49 +1290,24 @@ class Handler(BaseHTTPRequestHandler):
             nav2_p = data.get("nav2_patch") or {}
             ekf_p = data.get("ekf_patch") or {}
             slam_p = data.get("slam_patch") or {}
+            # analyze_robotics_ai resolves the real kinematics into target_base;
+            # the client echoes it here so a mecanum robot's lateral-velocity
+            # fusion is not silently disabled by a "2wd" fallback.
+            resolved_base = data.get("base") or nav2_p.get("base") or ekf_p.get("base") or "2wd"
 
-            # Nav2
+            # Nav2 -- apply only the keys the analysis actually set; everything
+            # else in the tuned config is left untouched.
             if nav2_p and patcher:
                 cur_nav2 = get_nav2_config(distro)
                 patched_nav2 = patcher.patch_nav2_text(
-                    cur_nav2,
-                    base_type=nav2_p.get("base", "2wd"),
-                    max_vel_x=nav2_p.get("max_vel_x", 0.5),
-                    max_vel_y=nav2_p.get("max_vel_y"),
-                    max_vel_theta=nav2_p.get("max_vel_theta", 2.5),
-                    max_accel_x=nav2_p.get("max_accel_x", 2.5),
-                    max_accel_y=nav2_p.get("max_accel_y"),
-                    max_accel_theta=nav2_p.get("max_accel_theta", 3.2),
-                    desired_linear_vel=nav2_p.get("desired_linear_vel"),
-                    inflation_radius=nav2_p.get("inflation_radius"),
-                    cost_scaling_factor=nav2_p.get("cost_scaling_factor"),
-                    max_decel_x=nav2_p.get("max_decel_x"),
-                    max_decel_theta=nav2_p.get("max_decel_theta"),
-                    xy_goal_tolerance=nav2_p.get("xy_goal_tolerance"),
-                    yaw_goal_tolerance=nav2_p.get("yaw_goal_tolerance"),
-                    lookahead_dist=nav2_p.get("lookahead_dist"),
-                    approach_velocity_scaling_dist=nav2_p.get("approach_velocity_scaling_dist"),
-                    movement_time_allowance=nav2_p.get("movement_time_allowance"),
-                    required_movement_radius=nav2_p.get("required_movement_radius"),
-                    rotate_to_heading_angular_vel=nav2_p.get("rotate_to_heading_angular_vel"),
-                    angular_dist_threshold=nav2_p.get("angular_dist_threshold"),
-                    symmetric_yaw_tolerance=nav2_p.get("symmetric_yaw_tolerance"),
-                    raytrace_range=nav2_p.get("raytrace_range"),
-                    obstacle_max_range=nav2_p.get("obstacle_max_range")
+                    cur_nav2, **_nav2_kwargs(dict(nav2_p, base_type=resolved_base))
                 )
                 save_nav2_config(patched_nav2, distro)
 
             # EKF
             if ekf_p and patcher:
-                cur_ekf = get_ekf_config(nav2_p.get("base", "2wd"))
-                patched_ekf = patcher.patch_ekf_text(
-                    cur_ekf,
-                    base_type=nav2_p.get("base", "2wd"),
-                    frequency=ekf_p.get("frequency", 50.0),
-                    two_d_mode=ekf_p.get("two_d_mode", True),
-                    fuse_vy=ekf_p.get("fuse_vy"),
-                    fuse_imu_yaw=ekf_p.get("fuse_imu_yaw", False)
-                )
+                cur_ekf = get_ekf_config(resolved_base)
+                patched_ekf = patcher.patch_ekf_text(cur_ekf, **_ekf_kwargs(ekf_p, base=resolved_base))
                 save_ekf_config(patched_ekf)
 
             # SLAM
@@ -1390,64 +1340,58 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ai/deploy_robot":
             specs = data.get("specs") or {}
             distro = data.get("distro") or detect_ros_distro()
-            base = specs.get("base", "2wd")
+            # generate_custom_robot_specs() returns {design, tuning:{nav2,ekf,slam}, workflow};
+            # accept that nested shape or a pre-flattened one.
+            tuning = specs.get("tuning") or specs
+            design = specs.get("design") or {}
+            nav2_cfg = tuning.get("nav2") or {}
+            ekf_cfg = tuning.get("ekf") or {}
+            slam_cfg = tuning.get("slam") or {}
+            base = (design.get("base_type") or nav2_cfg.get("base")
+                    or ekf_cfg.get("base") or specs.get("base") or "2wd")
+            laser_sensor = design.get("laser_sensor") or specs.get("laser_sensor")
 
             # 1. Update EKF
-            ekf_cfg = specs.get("ekf", {})
             if ekf_cfg and patcher:
                 cur_ekf = get_ekf_config(base)
-                patched_ekf = patcher.patch_ekf_text(
-                    cur_ekf,
-                    base_type=base,
-                    frequency=ekf_cfg.get("frequency", 50.0),
-                    two_d_mode=ekf_cfg.get("two_d_mode", True),
-                    fuse_vy=ekf_cfg.get("fuse_vy", False),
-                    fuse_imu_yaw=ekf_cfg.get("fuse_imu_yaw", False)
-                )
+                patched_ekf = patcher.patch_ekf_text(cur_ekf, **_ekf_kwargs(ekf_cfg, base=base))
                 save_ekf_config(patched_ekf)
 
             # 2. Update Nav2
-            nav2_cfg = specs.get("nav2", {})
             if nav2_cfg and patcher:
                 cur_nav2 = get_nav2_config(distro)
                 patched_nav2 = patcher.patch_nav2_text(
-                    cur_nav2,
-                    base_type=base,
-                    max_vel_x=nav2_cfg.get("max_vel_x", 0.5),
-                    max_vel_y=nav2_cfg.get("max_vel_y"),
-                    max_vel_theta=nav2_cfg.get("max_vel_theta", 2.5),
-                    max_accel_x=nav2_cfg.get("max_accel_x", 2.5),
-                    max_accel_y=nav2_cfg.get("max_accel_y"),
-                    max_accel_theta=nav2_cfg.get("max_accel_theta", 3.2),
-                    desired_linear_vel=nav2_cfg.get("desired_linear_vel"),
-                    inflation_radius=nav2_cfg.get("inflation_radius"),
-                    cost_scaling_factor=nav2_cfg.get("cost_scaling_factor")
+                    cur_nav2, **_nav2_kwargs(dict(nav2_cfg, base_type=base))
                 )
                 save_nav2_config(patched_nav2, distro)
 
             # 3. Update SLAM
-            slam_cfg = specs.get("slam", {})
             if slam_cfg and patcher:
                 cur_slam = get_slam_config()
                 patched_slam = patcher.patch_slam_text(
                     cur_slam,
-                    resolution=slam_cfg.get("resolution", 0.05),
-                    max_laser_range=slam_cfg.get("max_laser_range", 12.0)
+                    resolution=slam_cfg.get("resolution"),
+                    max_laser_range=slam_cfg.get("max_laser_range"),
+                    minimum_travel_distance=slam_cfg.get("minimum_travel_distance"),
+                    minimum_travel_heading=slam_cfg.get("minimum_travel_heading"),
                 )
                 save_slam_config(patched_slam)
 
             # 4. Update console_config.json
             cfg = load_config()
             cfg["base_type"] = base
-            if specs.get("laser_sensor"):
-                cfg["laser_sensor"] = specs["laser_sensor"]
+            if laser_sensor:
+                cfg["laser_sensor"] = laser_sensor
             save_config(cfg)
 
             self._send_json({
                 "status": "deployed",
                 "base": base,
                 "distro": distro,
-                "laser_sensor": specs.get("laser_sensor"),
+                "laser_sensor": laser_sensor,
+                "nav2_updated": bool(nav2_cfg),
+                "ekf_updated": bool(ekf_cfg),
+                "slam_updated": bool(slam_cfg),
                 "message": f"Successfully configured and deployed custom {base.upper()} robot!"
             })
             return

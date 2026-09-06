@@ -181,6 +181,126 @@ class TestLinorobot2Console(unittest.TestCase):
                        "anti_drift", "anti_overshoot", "destination_guarantee", "smooth_rotation"]:
             self.assertIn(p_name, patcher.PRESETS)
 
+    # --- Sample Nav2 params, trimmed to the keys the patcher touches ---------
+    NAV2_SAMPLE = (
+        'amcl:\n  ros__parameters:\n'
+        '    robot_model_type: "nav2_amcl::DifferentialMotionModel"\n'
+        'controller_server:\n  ros__parameters:\n'
+        '    min_y_velocity_threshold: 0.5\n'
+        '    progress_checker:\n'
+        '      required_movement_radius: 0.5\n'
+        '      movement_time_allowance: 10.0\n'
+        '    general_goal_checker:\n'
+        '      xy_goal_tolerance: 0.35\n'
+        '      yaw_goal_tolerance: 0.35\n'
+        '    FollowPath:\n'
+        '      angular_dist_threshold: 0.785\n'
+        '      desired_linear_vel: 0.4  # cruise\n'
+        '      lookahead_dist: 0.6\n'
+        '      approach_velocity_scaling_dist: 0.6\n'
+        '      max_vel_x: 0.5\n'
+        '      acc_lim_x: 2.5\n'
+        '      decel_lim_x: -2.5\n'
+        'velocity_smoother:\n  ros__parameters:\n'
+        '    max_velocity: [0.8, 0.0, 2.5]\n'
+        '    min_velocity: [-0.8, 0.0, -2.5]\n'
+        '    max_accel: [2.5, 0.0, 3.2]\n'
+        '    max_decel: [-2.5, 0.0, -3.2]\n'
+        'local_costmap:\n  local_costmap:\n    ros__parameters:\n'
+        '      inflation_radius: 0.70\n'
+        '      cost_scaling_factor: 3.0\n'
+        '      raytrace_range: 3.0\n'
+        '      obstacle_max_range: 2.5\n'
+    )
+
+    def test_patch_nav2_is_opt_in(self):
+        """A targeted patch must not reset params it was not given (regression)."""
+        import patcher
+        # Only ask for a costmap-clearing fix (upstream #37 shape).
+        out = patcher.patch_nav2_text(
+            self.NAV2_SAMPLE,
+            raytrace_range=3.5, obstacle_max_range=3.0, inflation_radius=0.55,
+        )
+        self.assertIn("raytrace_range: 3.5", out)
+        self.assertIn("obstacle_max_range: 3.0", out)
+        self.assertIn("inflation_radius: 0.55", out)
+        # The tuned 0.8 m/s top speed and the AMCL model survive untouched.
+        self.assertIn("max_velocity: [0.8, 0.0, 2.5]", out)
+        self.assertIn("max_vel_x: 0.5", out)
+        self.assertIn('robot_model_type: "nav2_amcl::DifferentialMotionModel"', out)
+        self.assertIn("desired_linear_vel: 0.4  # cruise", out)
+
+    def test_patch_nav2_applies_goal_and_rpp_params(self):
+        """The goal-checker / RPP / progress-checker params must actually reach the YAML."""
+        import patcher
+        out = patcher.patch_nav2_text(
+            self.NAV2_SAMPLE,
+            xy_goal_tolerance=0.08, yaw_goal_tolerance=0.12,
+            lookahead_dist=0.45, approach_velocity_scaling_dist=0.75,
+            movement_time_allowance=15.0, required_movement_radius=0.15,
+            angular_dist_threshold=0.6,
+        )
+        self.assertIn("xy_goal_tolerance: 0.08", out)
+        self.assertIn("yaw_goal_tolerance: 0.12", out)
+        self.assertIn("lookahead_dist: 0.45", out)
+        self.assertIn("approach_velocity_scaling_dist: 0.75", out)
+        self.assertIn("movement_time_allowance: 15.0", out)
+        self.assertIn("required_movement_radius: 0.15", out)
+        self.assertIn("angular_dist_threshold: 0.6", out)
+        # Untouched velocity block stays put.
+        self.assertIn("max_velocity: [0.8, 0.0, 2.5]", out)
+
+    def test_patch_nav2_partial_velocity_reads_existing(self):
+        """Supplying only max_vel_x keeps the file's y / theta components."""
+        import patcher
+        out = patcher.patch_nav2_text(self.NAV2_SAMPLE, max_vel_x=0.35)
+        self.assertIn("max_velocity: [0.35, 0.0, 2.5]", out)
+        self.assertIn("min_velocity: [-0.35, 0.0, -2.5]", out)
+
+    def test_patch_ekf_is_opt_in(self):
+        import patcher
+        raw = (
+            "ekf_filter_node:\n    ros__parameters:\n"
+            "        frequency: 30.0\n        two_d_mode: true\n"
+            "        odom0_config: [false, false, false,\n"
+            "                       false, false, false,\n"
+            "                       true, false, false,\n"
+            "                       false, false, true,\n"
+            "                       false, false, false]\n"
+            "        imu0_config: [false, false, false,\n"
+            "                      false, false, false,\n"
+            "                      false, false, false,\n"
+            "                      false, false, true,\n"
+            "                      false, false, false]\n"
+        )
+        # Only disable IMU yaw fusion (upstream #113). Frequency 30.0 must remain.
+        out = patcher.patch_ekf_text(raw, fuse_imu_yaw=False)
+        self.assertIn("frequency: 30.0", out)
+        self.assertIn("false, false, false,\n                      false, false, false", out)
+
+    def test_kwargs_helpers_drop_absent_keys(self):
+        import patcher
+        kw = patcher.nav2_kwargs({"base": "mecanum", "inflation_radius": 0.6,
+                                  "max_vel_x": None, "unrelated": 1})
+        self.assertEqual(kw, {"base_type": "mecanum", "inflation_radius": 0.6})
+        ekw = patcher.ekf_kwargs({"fuse_vy": True, "frequency": None}, base="4wd")
+        self.assertEqual(ekw, {"base_type": "4wd", "fuse_vy": True})
+
+    def test_deploy_robot_specs_shape(self):
+        """generate_custom_robot_specs stays in the nested {design, tuning} shape the deploy path expects."""
+        import patcher
+        specs = server.generate_custom_robot_specs(
+            "4WD Mecanum robot with 97mm wheels, 30cm track width, LD19 lidar")
+        tuning = specs["tuning"]
+        base = specs["design"]["base_type"]
+        self.assertEqual(base, "mecanum")
+        nav_kw = patcher.nav2_kwargs(dict(tuning["nav2"], base_type=base))
+        self.assertEqual(nav_kw["base_type"], "mecanum")
+        self.assertIn("inflation_radius", nav_kw)
+        ekf_kw = patcher.ekf_kwargs(tuning["ekf"], base=base)
+        self.assertTrue(ekf_kw["fuse_vy"])
+        self.assertEqual(ekf_kw["frequency"], 50.0)
+
     def test_live_server_status_api(self):
         # Queries active console server on localhost:8090
         try:
