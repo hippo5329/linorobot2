@@ -10,7 +10,7 @@ no(){ echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 step(){ echo; echo "== $* =="; }
 
 export ROS_DISTRO="$DISTRO"
-{ set +u; [ -f "/opt/ros/$DISTRO/setup.bash" ] && source "/opt/ros/$DISTRO/setup.bash" 2>/dev/null; set -e; } || true
+if [ -f "/opt/ros/$DISTRO/setup.bash" ]; then set +u; source "/opt/ros/$DISTRO/setup.bash" >/dev/null 2>&1 || true; set -o pipefail; fi
 
 step "unit suites"
 ( cd "$REPO/tools/linorobot2_console" && python3 test_console.py 2>&1 | tail -3 | grep -q "^OK" ) \
@@ -47,7 +47,7 @@ P /api/params/merge "{\"kind\":\"nav2\",\"distro\":\"$DISTRO\",\"target\":\"temp
   && ok "/api/params/merge dry-run" || no "/api/params/merge"
 P /api/sensor_install_cmd '{"kind":"laser","key":"ldlidar","skip_udev":true}' | grep -q ldlidar_stl_ros2 \
   && ok "/api/sensor_install_cmd" || no "/api/sensor_install_cmd"
-kill $SRV 2>/dev/null; wait $SRV 2>/dev/null
+kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true
 
 step "launch-file introspection ($DISTRO)"
 if command -v ros2 >/dev/null && python3 -c "import launch,launch_ros" 2>/dev/null; then
