@@ -52,6 +52,7 @@
         This is a one-time file read -- Console does not talk to config-engine at runtime.</p>
       <div class="row">
         <input type="text" id="import-path" placeholder="/path/to/config/custom/my_robot_config.h">
+        <button type="button" class="btn pick-btn" data-pick="file" data-exts="h" data-target="import-path">&#128193;</button>
         <button id="btn-import" class="btn">Import</button>
       </div>
       <div id="import-result" class="hint"></div>
@@ -75,7 +76,7 @@
           </select>
         </label>
         <label>Workspace path
-          <input type="text" id="install-workspace">
+          <input type="text" id="install-workspace"><button type="button" class="btn pick-btn" data-pick="dir" data-target="install-workspace">&#128193;</button>
         </label>
       </div>
       <p class="hint">Docker/Podman need no ROS install on this machine at all -- linorobot2's
@@ -133,14 +134,15 @@
         </div>
         <div class="row">
           <label>Base serial port <input type="text" id="docker-base-serial-port" value="/dev/ttyACM0"></label>
+          <button type="button" class="btn pick-btn" data-pick="serial" data-target="docker-base-serial-port">&#128268; ports</button>
           <label>ROS_DOMAIN_ID <input type="text" id="docker-ros-domain-id" value="0"></label>
           <label>GPU_ID (gazebo-cuda only) <input type="text" id="docker-gpu-id" value="0"></label>
         </div>
-        <p class="hint">Writes <code>docker/.env</code> and a
-          <code>tools/linorobot2_console/docker/.env</code> + <code>devices.generated.yaml</code>
-          (the base serial + lidar device mappings) into the <b>console's own</b> compose dir --
-          the repo's <code>docker/</code> is never written -- then clones linorobot2 (if needed)
-          and runs <code>docker compose --env-file .env -f docker-compose.yaml -f devices.generated.yaml build</code>.
+        <p class="hint">Writes <code>tools/linorobot2_console/docker/.env</code> +
+          <code>devices.generated.yaml</code> (the base serial + lidar device mappings) into the
+          <b>console's own</b> compose dir -- the repo's <code>docker/</code> is never written --
+          then clones linorobot2 (if needed) and runs
+          <code>docker compose --env-file .env -f docker-compose.yaml -f devices.generated.yaml build</code>.
           Sensor drivers install <i>inside</i> the image via linorobot2's own <code>install.bash</code>
           (the documented Docker build path, not run on this host).</p>
         <button id="btn-docker-build" class="btn btn-primary">Write config + build image</button>
@@ -278,6 +280,7 @@
       </div>
       <div class="row" style="margin-top: 10px;">
         <input type="text" id="nav-params-file" placeholder="(custom params file override, blank = auto-resolve active console config)" style="flex: 1;">
+        <button type="button" class="btn pick-btn" data-pick="file" data-exts="yaml,yml" data-target="nav-params-file">&#128193;</button>
       </div>
       <div class="row" style="margin-top: 10px;">
         <button id="btn-nav-start" class="btn btn-primary">Start Navigation</button>
@@ -449,6 +452,7 @@
             either direction.</p>
           <div class="row" style="margin-bottom: 6px;">
             <input type="text" id="params-export-dir" placeholder="export dir, e.g. ~/my_nav2_params" style="flex: 1;">
+            <button type="button" class="btn pick-btn" data-pick="dir" data-target="params-export-dir">&#128193;</button>
             <button id="btn-params-export" class="btn btn-sm">Export bundle</button>
           </div>
           <div class="row" style="margin-bottom: 6px;">
@@ -625,9 +629,11 @@
       <div class="row">
         <label>linorobot2_hardware path
           <input type="text" id="fw-hardware-path" placeholder="~/linorobot2_hardware">
+          <button type="button" class="btn pick-btn" data-pick="dir" data-target="fw-hardware-path">&#128193;</button>
         </label>
         <label>config-engine port <input type="text" id="fw-port" value="8085"></label>
-        <label>Board device (for USB passthrough) <input type="text" id="fw-upload-port" value="/dev/ttyUSB0"></label>
+        <label>Board device (for USB passthrough) <input type="text" id="fw-upload-port" value="" placeholder="(blank = no board yet)"></label>
+        <button type="button" class="btn pick-btn" data-pick="serial" data-target="fw-upload-port">&#128268; ports</button>
       </div>
       <div class="row">
         <label>Run on (optional, e.g. user@robot-computer)
@@ -651,7 +657,7 @@
     <div class="card">
       <h2>Workspace</h2>
       <div class="row">
-        <input type="text" id="cfg-workspace">
+        <input type="text" id="cfg-workspace"><button type="button" class="btn pick-btn" data-pick="dir" data-target="cfg-workspace">&#128193;</button>
         <button id="btn-save-workspace" class="btn">Save</button>
       </div>
     </div>
@@ -671,6 +677,7 @@
           </select>
         </label>
         <label>Device (serial) <input type="text" id="cfg-agent-device"></label>
+        <button type="button" class="btn pick-btn" data-pick="serial" data-target="cfg-agent-device">&#128268; ports</button>
         <label>Port (udp4) <input type="text" id="cfg-agent-port"></label>
         <label>Baud (serial) <input type="text" id="cfg-agent-baud"></label>
       </div>
@@ -709,6 +716,23 @@
     <button id="console-collapse" class="btn-mini">_</button>
   </div>
   <pre class="console-pane" id="console-pane"></pre>
+</div>
+
+<div id="picker-overlay">
+  <div id="picker-panel" role="dialog" aria-modal="true">
+    <div class="pk-head"><span id="picker-title">Pick</span><button id="picker-close" class="btn-mini">&times;</button></div>
+    <div id="picker-path" hidden>
+      <button id="picker-up" class="btn-mini" title="Up one level">&#8593;</button>
+      <code id="picker-cwd">/</code>
+    </div>
+    <div id="picker-list"></div>
+    <div class="pk-foot">
+      <span class="hint" id="picker-hint"></span>
+      <button id="picker-refresh" class="btn btn-sm">&#8635; rescan</button>
+      <button id="picker-use" class="btn btn-primary btn-sm" hidden>Use this folder</button>
+      <button id="picker-cancel" class="btn btn-sm">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <script src="app.js"></script>

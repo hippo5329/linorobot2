@@ -240,6 +240,32 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertTrue(t2.endswith("ekf_mecanum.yaml"))
         self.assertTrue(srv._params_paths("slam")[1].endswith("config/slam.yaml"))
 
+    def test_list_dir_for_path_pickers(self):
+        import importlib
+        srv = importlib.import_module("server")
+        here = os.path.dirname(os.path.abspath(__file__))
+
+        d = srv.list_dir(here, only="dir")
+        self.assertEqual(d["path"], here)
+        self.assertTrue(d["parent"])
+        self.assertTrue(all(e["is_dir"] for e in d["entries"]))
+        self.assertIn("config", [e["name"] for e in d["entries"]])
+        self.assertTrue(all(not e["name"].startswith(".") for e in d["entries"]))  # hidden dropped
+
+        cfg = srv.list_dir(os.path.join(here, "config"), only="file", exts="yaml")
+        files = [e["name"] for e in cfg["entries"] if not e["is_dir"]]
+        self.assertIn("nav2_jazzy.yaml", files)
+        self.assertTrue(all(f.endswith(".yaml") for f in files))
+        # dirs still shown in file mode so you can navigate
+        self.assertTrue(any(e["is_dir"] for e in cfg["entries"]) or not any(
+            os.path.isdir(os.path.join(here, "config", n)) for n in os.listdir(os.path.join(here, "config"))))
+
+        # blank / bad paths never raise; fall back to $HOME
+        home = os.path.expanduser("~")
+        self.assertEqual(srv.list_dir("")["path"], home)
+        self.assertEqual(srv.list_dir("/no/such/dir/anywhere")["path"], home)
+        self.assertEqual(srv.list_dir("~")["path"], home)
+
     def test_console_owns_its_docker_compose(self):
         """The console ships its own compose stack and never edits the repo's docker/."""
         d = os.path.join(os.path.dirname(__file__), "docker")

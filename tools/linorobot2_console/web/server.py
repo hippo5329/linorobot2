@@ -664,6 +664,52 @@ def to_by_path(dev):
     return _by_path_for(dev) or dev
 
 
+def list_dir(path, only="any", exts=""):
+    """Directory listing for the browser's path pickers.
+
+    only: "dir" (folders only), "file", or "any". exts: comma-separated
+    extensions filter for files (e.g. "yaml,yml"). Blank/'.'/'~' -> $HOME.
+    Returns {path, parent, entries:[{name, path, is_dir}]} (sorted, dirs first,
+    hidden entries dropped). Never raises -- an unreadable path returns an
+    error field and falls back to $HOME.
+    """
+    home = os.path.expanduser("~")
+    raw = (path or "").strip()
+    if raw in ("", ".", "~"):
+        raw = home
+    target = os.path.abspath(os.path.expanduser(raw))
+    if not os.path.isdir(target):
+        target = os.path.dirname(target) if target else home
+        if not os.path.isdir(target):
+            target = home
+    ext_set = {e.strip().lstrip(".").lower() for e in exts.split(",") if e.strip()}
+    entries, err = [], None
+    try:
+        for name in sorted(os.listdir(target), key=str.lower):
+            if name.startswith("."):
+                continue
+            full = os.path.join(target, name)
+            is_dir = os.path.isdir(full)
+            if only == "dir" and not is_dir:
+                continue
+            if only == "file" and is_dir:
+                pass  # still show dirs so the user can navigate
+            if not is_dir and ext_set and name.rsplit(".", 1)[-1].lower() not in ext_set:
+                continue
+            entries.append({"name": name, "path": full, "is_dir": is_dir})
+    except OSError as e:
+        err = str(e)
+    entries.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+    parent = os.path.dirname(target)
+    return {
+        "path": target,
+        "parent": parent if parent != target else None,
+        "home": home,
+        "entries": entries,
+        **({"error": err} if err else {}),
+    }
+
+
 def list_serial_ports():
     """Serial devices present now, each with its stable path + USB identity."""
     seen = {}  # realpath -> record
@@ -1284,6 +1330,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/serial_ports":
             self._send_json({"ports": list_serial_ports()})
+            return
+
+        if path == "/api/list_dir":
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            self._send_json(list_dir(q.get("path", ""), only=q.get("only", "any"),
+                                    exts=q.get("exts", "")))
             return
 
         if path == "/api/nav2_config":

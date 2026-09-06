@@ -191,3 +191,41 @@ body {
   border-color: #eab30840;
   background: #eab30814;
 }
+
+/* ---- path / serial-port picker ---- */
+.pick-btn { padding: 3px 7px; font-size: 12px; line-height: 1; white-space: nowrap; }
+#picker-overlay {
+  position: fixed; inset: 0; background: rgba(2, 6, 16, 0.6);
+  display: none; align-items: center; justify-content: center; z-index: 1000;
+}
+#picker-overlay.open { display: flex; }
+#picker-panel {
+  width: min(460px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+  background: #0c121e; border: 1px solid var(--border-soft, #2a3446);
+  border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); overflow: hidden;
+}
+#picker-panel .pk-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft, #2a3446); font-weight: 600; color: #e2e8f0;
+}
+#picker-panel .pk-head button { margin-left: auto; }
+#picker-path {
+  display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft, #2a3446);
+  font-family: var(--font-mono, monospace); font-size: 11px; color: #94a3b8;
+}
+#picker-path code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#picker-list { overflow: auto; padding: 4px; flex: 1; min-height: 120px; }
+.pk-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  cursor: pointer; font-size: 12px; color: #cbd5e1;
+}
+.pk-row:hover { background: #16203400; background: rgba(56,189,248,0.12); }
+.pk-row .pk-ic { width: 16px; text-align: center; opacity: 0.8; }
+.pk-row .pk-sub { color: #64748b; font-size: 11px; margin-left: auto; font-family: var(--font-mono, monospace); }
+#picker-panel .pk-foot {
+  display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border-soft, #2a3446);
+}
+#picker-panel .pk-foot .hint { align-self: center; margin-right: auto; }
+
+#picker-path[hidden] { display: none; }

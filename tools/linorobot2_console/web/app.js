@@ -911,18 +911,38 @@ const btnFwStop = document.getElementById("btn-fw-stop");
 btnFwStart.addEventListener("click", () => {
   const hwPath = document.getElementById("fw-hardware-path").value.trim() || "~/linorobot2_hardware";
   const port = document.getElementById("fw-port").value.trim() || "8085";
-  const device = document.getElementById("fw-upload-port").value.trim() || "/dev/ttyUSB0";
+  const device = document.getElementById("fw-upload-port").value.trim();
   const remoteHost = document.getElementById("fw-remote-host").value.trim();
   const useDocker = document.getElementById("fw-use-docker") ? document.getElementById("fw-use-docker").checked : true;
 
   let inner;
   if (useDocker) {
+    // `--device` is only useful for *flashing*; config-engine runs fine
+    // without a board (it does its own device detection). Only pass it when
+    // the path actually exists -- otherwise `docker run --device=<missing>`
+    // exits immediately and you get a dead port ("can't reach config-engine").
+    // Run detached with a fixed name, then poll readiness before handing over
+    // the link, and dump `docker logs` if it never comes up.
     inner = "set -e\n" + [
       `[ -d ${hwPath} ] || git clone https://github.com/linorobot/linorobot2_hardware ${hwPath}`,
       `if command -v docker >/dev/null 2>&1; then`,
-      `  echo ">>> Launching robot_config_engine in Docker container on port ${port}..."`,
-      `  docker run --rm -p ${port}:${port} -v ${hwPath}:/workspace -w /workspace/tools/robot_config_engine/web ` +
-        `--device=${device} python:3.11-slim bash -c "apt-get update -qq && apt-get install -y -qq git build-essential cmake >/dev/null && pip install -q platformio && python3 server.py ${port}"`,
+      `  DEV=""`,
+      `  if [ -n "${device}" ] && [ -e "${device}" ]; then DEV="--device=${device}"; ` +
+        `else [ -n "${device}" ] && echo ">>> note: ${device} not present -- starting config-engine without USB passthrough (attach the board + restart to flash)"; fi`,
+      `  docker rm -f console-config-engine >/dev/null 2>&1 || true`,
+      `  echo ">>> Launching robot_config_engine (Docker) on 0.0.0.0:${port} ... first run pulls python:3.11-slim + pip installs platformio, this can take a few minutes."`,
+      `  docker run -d --name console-config-engine -p 0.0.0.0:${port}:${port} $DEV ` +
+        `-v ${hwPath}:/workspace -w /workspace/tools/robot_config_engine/web ` +
+        `python:3.11-slim bash -c "apt-get update -qq && apt-get install -y -qq git build-essential cmake >/dev/null && pip install -q platformio && python3 server.py ${port}"`,
+      `  echo ">>> waiting for config-engine to answer on port ${port} ..."`,
+      `  for i in $(seq 1 150); do`,
+      `    if curl -sf -o /dev/null "http://127.0.0.1:${port}/"; then echo ">>> config-engine is UP -> open the link above."; break; fi`,
+      `    if ! docker ps -q -f name=console-config-engine | grep -q .; then echo ">>> container exited early -- logs:"; docker logs --tail 60 console-config-engine 2>&1; exit 1; fi`,
+      `    sleep 2`,
+      `  done`,
+      `  curl -sf -o /dev/null "http://127.0.0.1:${port}/" || { echo ">>> still not answering after 5 min -- logs:"; docker logs --tail 60 console-config-engine 2>&1; exit 1; }`,
+      `  echo ">>> streaming config-engine logs (Stop button removes the container):"`,
+      `  docker logs -f console-config-engine`,
       `else`,
       `  echo ">>> Docker not found, falling back to native host Python execution on port ${port}..."`,
       `  cd ${hwPath}/tools/robot_config_engine/web && python3 server.py ${port}`,
@@ -957,7 +977,16 @@ btnFwStart.addEventListener("click", () => {
     },
   });
 });
-btnFwStop.addEventListener("click", () => killSlot("main"));
+btnFwStop.addEventListener("click", () => {
+  const remoteHost = document.getElementById("fw-remote-host").value.trim();
+  const rm = "docker rm -f console-config-engine >/dev/null 2>&1 || true";
+  fetch("/api/exec", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ command: remoteHost ? `ssh ${remoteHost} ${JSON.stringify(rm)}` : rm, slot: "agent" }),
+  }).catch(() => {});
+  killSlot("main");
+});
 
 // ---------- magnetometer calibration ----------
 // Needs Bringup already running elsewhere (cmd_vel to spin the base, IMU/mag
@@ -1782,3 +1811,103 @@ if (btnAiRobotDeploy) {
     }
   });
 }
+
+// ============ path / serial-port picker (used by .pick-btn buttons) ============
+(function () {
+  const overlay = document.getElementById("picker-overlay");
+  if (!overlay) return;
+  const elTitle = document.getElementById("picker-title");
+  const elPath = document.getElementById("picker-path");
+  const elCwd = document.getElementById("picker-cwd");
+  const elList = document.getElementById("picker-list");
+  const elHint = document.getElementById("picker-hint");
+  const btnUp = document.getElementById("picker-up");
+  const btnUse = document.getElementById("picker-use");
+  const btnRefresh = document.getElementById("picker-refresh");
+  let ctx = null;
+
+  function close() { overlay.classList.remove("open"); ctx = null; }
+  function row(txt) {
+    const d = document.createElement("div");
+    d.className = "pk-row"; d.textContent = txt; return d;
+  }
+  function pick(value) {
+    if (ctx && ctx.target) {
+      ctx.target.value = value;
+      ctx.target.dispatchEvent(new Event("input", { bubbles: true }));
+      ctx.target.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    close();
+  }
+
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  document.getElementById("picker-close").onclick = close;
+  document.getElementById("picker-cancel").onclick = close;
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("open")) close();
+  });
+
+  async function loadDir(path) {
+    elList.replaceChildren(row("Loading…"));
+    let data;
+    try {
+      const q = new URLSearchParams({ path: path || "", only: ctx.only, exts: ctx.exts || "" });
+      data = await fetch("/api/list_dir?" + q).then((r) => r.json());
+    } catch (e) { elList.replaceChildren(row("Error: " + e.message)); return; }
+    ctx.cwd = data.path;
+    elCwd.textContent = data.path;
+    btnUp.disabled = !data.parent;
+    btnUp.onclick = () => loadDir(data.parent);
+    const rows = (data.entries || []).map((e) => {
+      const r = document.createElement("div");
+      r.className = "pk-row";
+      r.innerHTML = '<span class="pk-ic">' + (e.is_dir ? "📂" : "📄") + "</span>" + escapeHtml(e.name);
+      r.onclick = () => (e.is_dir ? loadDir(e.path) : (ctx.only === "dir" ? null : pick(e.path)));
+      r.ondblclick = () => e.is_dir && loadDir(e.path);
+      return r;
+    });
+    elList.replaceChildren(...(rows.length ? rows : [row(data.error ? "(" + data.error + ")" : "(empty)")]));
+  }
+
+  async function loadSerial() {
+    elList.replaceChildren(row("Scanning…"));
+    await refreshSerialPorts();
+    const rows = (SERIAL_PORTS || []).map((p) => {
+      const r = document.createElement("div");
+      r.className = "pk-row";
+      const id = [p.vendor, p.model].filter(Boolean).join(" ") || "USB serial";
+      r.innerHTML = '<span class="pk-ic">🔌</span>' + escapeHtml(id) +
+        (p.usb_id ? ' <span class="pk-sub">' + escapeHtml(p.usb_id) + "</span>" : "") +
+        '<span class="pk-sub">→ ' + escapeHtml(p.tty) + "</span>";
+      r.onclick = () => pick(p.preferred);
+      return r;
+    });
+    elList.replaceChildren(...(rows.length ? rows : [row("No USB serial devices detected.")]));
+  }
+
+  function openPicker(target, kind, exts) {
+    const isSerial = kind === "serial";
+    ctx = {
+      target, kind, exts: exts || "",
+      only: kind === "file" ? "file" : kind === "dir" ? "dir" : "any",
+      cwd: "",
+    };
+    elTitle.textContent = isSerial ? "Pick a serial port"
+      : kind === "dir" ? "Pick a folder" : "Pick a file";
+    elPath.hidden = isSerial;
+    btnUse.hidden = kind !== "dir";
+    btnUse.onclick = () => pick(ctx.cwd);
+    elHint.textContent = isSerial ? "" : "click a folder to open it";
+    btnRefresh.onclick = () => (isSerial ? loadSerial() : loadDir(ctx.cwd));
+    overlay.classList.add("open");
+    if (isSerial) loadSerial();
+    else loadDir((target.value || "").trim());
+  }
+
+  document.querySelectorAll(".pick-btn[data-target]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const t = document.getElementById(b.dataset.target);
+      if (t) openPicker(t, b.dataset.pick, b.dataset.exts);
+    });
+  });
+})();
