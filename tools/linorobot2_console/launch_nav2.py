@@ -17,18 +17,60 @@ import os
 import re
 import sys
 import tempfile
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
-from launch.substitutions import LaunchConfiguration
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.conditions import IfCondition
-from launch_ros.substitutions import FindPackageShare
-from launch_ros.actions import Node
+try:
+    from launch import LaunchDescription
+    from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
+    from launch.substitutions import LaunchConfiguration
+    from launch.launch_description_sources import PythonLaunchDescriptionSource
+    from launch.conditions import IfCondition
+    from launch_ros.substitutions import FindPackageShare
+    from launch_ros.actions import Node
+except ImportError:
+    LaunchDescription = None
 
+
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/linorobot2/robot_config.yaml")
+
+def _load_robot_config_yaml(custom_path=None):
+    cfg_file = custom_path or os.environ.get("ROBOT_CONFIG_FILE") or DEFAULT_CONFIG_PATH
+    if not os.path.isfile(cfg_file):
+        return {}
+    params = {}
+    try:
+        with open(cfg_file, "r") as f:
+            in_lino = False
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if line.startswith("linorobot2:"):
+                    in_lino = True
+                    continue
+                elif in_lino and re.match(r"^[A-Za-z0-9_]+:\s*", line):
+                    in_lino = False
+                if in_lino:
+                    m = re.match(r"^\s+([A-Za-z0-9_]+):\s*(.*?)(?:\s+#.*)?$", line)
+                    if m:
+                        k, v = m.group(1), m.group(2).strip().strip("'\"")
+                        params[k] = v
+    except Exception:
+        pass
+
+    if "base" in params:
+        os.environ["LINOROBOT2_BASE"] = params["base"]
+    if "laser_sensor" in params:
+        os.environ["LINOROBOT2_LASER_SENSOR"] = params["laser_sensor"]
+    if "depth_sensor" in params:
+        os.environ["LINOROBOT2_DEPTH_SENSOR"] = params["depth_sensor"]
+    return params
+
+_load_robot_config_yaml()
 
 def resolve_nav2_and_slam(context, *args, **kwargs):
+    cfg_file = context.launch_configurations.get('config_file', DEFAULT_CONFIG_PATH).strip()
+    lino_cfg = _load_robot_config_yaml(cfg_file)
     distro = context.launch_configurations.get('distro', os.environ.get('ROS_DISTRO', 'jazzy')).strip().lower()
-    base = context.launch_configurations.get('base', os.environ.get('LINOROBOT2_BASE', '2wd')).strip().lower()
+    base = context.launch_configurations.get('base', lino_cfg.get('base', os.environ.get('LINOROBOT2_BASE', '2wd'))).strip().lower()
     is_slam = context.launch_configurations.get('slam', 'false').strip().lower() in ['true', '1', 'yes']
     passed_params = context.launch_configurations.get('params_file', '').strip()
     passed_slam_params = context.launch_configurations.get('slam_params_file', '').strip()
@@ -59,7 +101,7 @@ def resolve_nav2_and_slam(context, *args, **kwargs):
     # tools/linorobot2_console/patcher.py:patch_costmap_sources.
     depth_arg = context.launch_configurations.get('depth_costmap', 'auto').strip().lower()
     if depth_arg in ('', 'auto'):
-        depth_enabled = bool(os.environ.get('LINOROBOT2_DEPTH_SENSOR', '').strip())
+        depth_enabled = bool(lino_cfg.get('depth_sensor') or os.environ.get('LINOROBOT2_DEPTH_SENSOR', '').strip())
     else:
         depth_enabled = depth_arg in ('true', '1', 'yes', 'on')
 

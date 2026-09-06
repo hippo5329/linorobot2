@@ -606,5 +606,101 @@ class TestLinorobot2Console(unittest.TestCase):
         except Exception as e:
             self.skipTest(f"Live server test skipped: {e}")
 
+
+    def test_robot_config_yaml_roundtrip_fidelity(self):
+        cfg = {
+            "base": "mecanum",
+            "laser_sensor": "ld19",
+            "depth_sensor": "realsense",
+            "robot_name": "rover_mecanum",
+            "ros_distro": "jazzy",
+            "ros_domain_id": 42,
+            "micro_ros_transport": "serial",
+            "micro_ros_port": "/dev/ttyACM0",
+            "micro_ros_baudrate": 1500000,
+            "laser_serial_port": "/dev/serial/by-path/pci-0000:00-usb-0:1",
+            "laser_baud": "230400",
+            "madgwick": True,
+        }
+        sample_nav2 = "amcl:\n  ros__parameters:\n    use_sim_time: False\n    alpha1: 0.2"
+        sample_ekf = "ekf_filter_node:\n  ros__parameters:\n    frequency: 50.0"
+        sample_slam = "slam_toolbox:\n  ros__parameters:\n    resolution: 0.05"
+
+        yaml_text = server.generate_unified_yaml(cfg, sample_nav2, sample_ekf, sample_slam)
+        self.assertIn('linorobot2:', yaml_text)
+        self.assertIn('base: "mecanum"', yaml_text)
+        self.assertIn('laser_sensor: "ld19"', yaml_text)
+        self.assertIn('depth_sensor: "realsense"', yaml_text)
+        self.assertIn('nav2:', yaml_text)
+        self.assertIn('ekf:', yaml_text)
+        self.assertIn('slam:', yaml_text)
+
+        parsed = server.parse_unified_yaml(yaml_text)
+        lino = parsed["linorobot2"]
+        self.assertEqual(lino["base"], "mecanum")
+        self.assertEqual(lino["laser_sensor"], "ld19")
+        self.assertEqual(lino["depth_sensor"], "realsense")
+        self.assertEqual(lino["robot_name"], "rover_mecanum")
+        self.assertEqual(lino["ros_domain_id"], 42)
+        self.assertEqual(lino["micro_ros_port"], "/dev/ttyACM0")
+        self.assertEqual(lino["micro_ros_baudrate"], 1500000)
+        self.assertEqual(lino["madgwick"], True)
+        self.assertIn("use_sim_time: False", parsed["nav2"])
+        self.assertIn("frequency: 50.0", parsed["ekf"])
+        self.assertIn("resolution: 0.05", parsed["slam"])
+
+    def test_save_and_get_robot_config(self):
+        test_yaml_file = os.path.join(self.temp_dir, "test_robot_config.yaml")
+        orig_path = server.ROBOT_CONFIG_YAML_PATH
+        server.ROBOT_CONFIG_YAML_PATH = test_yaml_file
+        try:
+            cfg = {
+                "base": "4wd",
+                "laser_sensor": "ydlidar",
+                "depth_sensor": "astra",
+                "robot_name": "skid_steer_4wd",
+                "ros_domain_id": 7,
+                "micro_ros_transport": "serial",
+                "micro_ros_port": "/dev/ttyUSB0",
+                "micro_ros_baudrate": 921600,
+                "madgwick": False,
+            }
+            res = server.save_unified_config(cfg, distro="jazzy", base="4wd")
+            self.assertEqual(res["status"], "saved")
+            self.assertTrue(os.path.exists(test_yaml_file))
+
+            loaded = server.get_unified_config(distro="jazzy", base="4wd")
+            self.assertEqual(loaded["base"], "4wd")
+            self.assertEqual(loaded["linorobot2"]["laser_sensor"], "ydlidar")
+            self.assertEqual(loaded["linorobot2"]["depth_sensor"], "astra")
+            self.assertEqual(loaded["linorobot2"]["micro_ros_baudrate"], 921600)
+            self.assertEqual(loaded["linorobot2"]["madgwick"], False)
+        finally:
+            server.ROBOT_CONFIG_YAML_PATH = orig_path
+
+    def test_launch_bringup_loader_reads_robot_config(self):
+        import launch_bringup
+        test_yaml = os.path.join(self.temp_dir, "custom_robot_config.yaml")
+        sample_content = """linorobot2:
+  base: "mecanum"
+  laser_sensor: "ld19"
+  depth_sensor: "realsense"
+  micro_ros_transport: "serial"
+  micro_ros_port: "/dev/ttyACM0"
+  micro_ros_baudrate: 1500000
+  madgwick: true
+"""
+        with open(test_yaml, "w") as f:
+            f.write(sample_content)
+
+        params = launch_bringup._load_robot_config_yaml(test_yaml)
+        self.assertEqual(params["base"], "mecanum")
+        self.assertEqual(params["laser_sensor"], "ld19")
+        self.assertEqual(params["depth_sensor"], "realsense")
+        self.assertEqual(params["micro_ros_baudrate"], "1500000")
+        self.assertEqual(os.environ["LINOROBOT2_BASE"], "mecanum")
+        self.assertEqual(os.environ["LINOROBOT2_LASER_SENSOR"], "ld19")
+        self.assertEqual(os.environ["LINOROBOT2_DEPTH_SENSOR"], "realsense")
+
 if __name__ == "__main__":
     unittest.main()

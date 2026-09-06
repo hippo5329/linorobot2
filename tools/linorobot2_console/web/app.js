@@ -278,6 +278,18 @@ function populateSensorSelects() {
   Object.values(SENSORS.laser).forEach((e) =>
     (e.models || []).forEach((m) => addOpt(lm, m.code, `${m.code} — ${m.label}`)));
   if (typeof updateLaserDriverFieldsVisibility === "function") updateLaserDriverFieldsVisibility();
+
+  // Robot Environment tab selects
+  const envLaser = document.getElementById("env-laser-sensor");
+  if (envLaser) {
+    Object.values(SENSORS.laser).forEach((e) =>
+      (e.models || []).forEach((m) => addOpt(envLaser, m.code, `${m.code} — ${m.label}`)));
+  }
+  const envDepth = document.getElementById("env-depth-sensor");
+  if (envDepth) {
+    Object.values(SENSORS.depth).forEach((e) =>
+      (e.models || []).forEach((m) => addOpt(envDepth, m.code, `${m.code} — ${m.label}`)));
+  }
 }
 
 function renderSerialPortList() {
@@ -343,6 +355,17 @@ document.getElementById("btn-import").addEventListener("click", async () => {
   const resultEl = document.getElementById("import-result");
   if (data.error) {
     resultEl.textContent = data.error;
+    return;
+  }
+  if (data.type === "unified_yaml") {
+    resultEl.innerHTML = `<span style="color: var(--success);">✓ Imported Unified Configuration! Linorobot2, Nav2, EKF, and SLAM synchronized.</span>`;
+    loadRobotEnv();
+    loadUnifiedConfig();
+    return;
+  }
+  if (data.type === "robot_env") {
+    resultEl.innerHTML = `<span style="color: var(--success);">✓ Imported robot.env! Environment settings updated and synced to ~/.bashrc.</span>`;
+    loadRobotEnv();
     return;
   }
   if (data.base) document.getElementById("install-base").value = data.base;
@@ -664,24 +687,18 @@ function isBringupAlive() {
 }
 
 function bringupLaunchCommand() {
-  const installMode = document.getElementById("install-mode")?.value;
-  if (installMode === "docker" || installMode === "podman") {
+  if (isDockerMode()) {
     return `${composeResolveSnippet()}cd ${dockerDir()} && $COMPOSE ${dockerComposeFlags()} up bringup`;
   }
-  const c = state.config || {};
-  const laser = document.getElementById("bringup-laser-sensor")?.value || "";
-  const depth = document.getElementById("bringup-depth-sensor")?.value || "";
-  const envs = `export LINOROBOT2_LASER_SENSOR="${laser}"; export LINOROBOT2_DEPTH_SENSOR="${depth}"; `;
-  const transportArgs = c.agent_transport === "udp4"
-    ? `micro_ros_transport:=udp4 micro_ros_port:=${c.agent_port || "8888"}`
-    : `micro_ros_transport:=serial base_serial_port:=${c.agent_device || "/dev/ttyACM0"}`;
   const launcher = `${state.status?.web_dir || "."}/../launch_bringup.py`;
-  return envPrefix() + envs +
-    `if [ -f ${launcher} ]; then ` +
-    `ros2 launch ${launcher} ${transportArgs}; ` +
-    `else ` +
-    `ros2 launch linorobot2_bringup bringup.launch.py ${transportArgs}; ` +
-    `fi`;
+  const cfgPath = (state.robot_config && state.robot_config.path) || "~/.config/linorobot2/robot_config.yaml";
+  const base = document.getElementById("bringup-base-type")?.value || (state.config && state.config.base_type) || "2wd";
+  const dev = document.getElementById("bringup-agent-device")?.value || (state.config && state.config.agent_device) || "/dev/ttyACM0";
+  const baud = document.getElementById("bringup-agent-baud")?.value || (state.config && state.config.agent_baud) || "1500000";
+  const madgwick = document.getElementById("bringup-madgwick-toggle")?.checked ? "true" : "false";
+
+  return envPrefix() +
+    `ros2 launch ${launcher} config_file:=${cfgPath} base:=${base} base_serial_port:=${dev} micro_ros_baudrate:=${baud} madgwick:=${madgwick}`;
 }
 
 async function ensureBringupRunning() {
@@ -1911,3 +1928,151 @@ if (btnAiRobotDeploy) {
     });
   });
 })();
+
+
+// ============================================================================
+
+// ============================================================================
+// Robot & Nav2 Configuration Engine (robot_config.yaml - Single File of Truth)
+// ============================================================================
+function downloadFile(filename, content, type = "text/yaml;charset=utf-8") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
+}
+
+async function loadRobotConfig() {
+  try {
+    const distro = getDistro();
+    const res = await fetch(`/api/robot_config?distro=${distro}`);
+    const data = await res.json();
+    state.robot_config = data;
+    const lino = data.linorobot2 || {};
+
+    const bBase = document.getElementById("bringup-base-type");
+    if (bBase && (lino.base || data.base)) bBase.value = lino.base || data.base;
+
+    const bLaser = document.getElementById("bringup-laser-sensor");
+    if (bLaser && lino.laser_sensor) bLaser.value = lino.laser_sensor;
+
+    const bDepth = document.getElementById("bringup-depth-sensor");
+    if (bDepth && lino.depth_sensor) bDepth.value = lino.depth_sensor;
+
+    const bDev = document.getElementById("bringup-agent-device");
+    if (bDev && lino.micro_ros_port) bDev.value = lino.micro_ros_port;
+
+    const bBaud = document.getElementById("bringup-agent-baud");
+    if (bBaud && lino.micro_ros_baudrate) bBaud.value = lino.micro_ros_baudrate;
+
+    const instBase = document.getElementById("install-base");
+    if (instBase && (lino.base || data.base)) instBase.value = lino.base || data.base;
+
+    const editor = document.getElementById("unified-config-editor");
+    if (editor && data.yaml) editor.value = data.yaml;
+
+    const statusEl = document.getElementById("unified-status");
+    if (statusEl) statusEl.textContent = `Loaded from ${data.path}`;
+  } catch (e) {
+    console.warn("Failed to load robot_config.yaml:", e);
+  }
+}
+
+async function saveRobotConfigFromBringup() {
+  const statusEl = document.getElementById("bringup-config-status");
+  if (statusEl) statusEl.textContent = "Updating robot_config.yaml...";
+  const payload = {
+    base: document.getElementById("bringup-base-type")?.value || "2wd",
+    laser_sensor: document.getElementById("bringup-laser-sensor")?.value || "",
+    depth_sensor: document.getElementById("bringup-depth-sensor")?.value || "",
+    micro_ros_port: document.getElementById("bringup-agent-device")?.value || "/dev/ttyACM0",
+    micro_ros_baudrate: document.getElementById("bringup-agent-baud")?.value || "1500000",
+    madgwick: document.getElementById("bringup-madgwick-toggle")?.checked ?? true,
+  };
+  try {
+    const res = await fetch("/api/robot_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.status === "saved") {
+      if (statusEl) statusEl.innerHTML = `<span style="color: var(--success);">✓ Updated robot_config.yaml</span>`;
+      loadRobotConfig();
+      logLine(`[console] Updated robot parameters in ${data.path}`);
+    } else {
+      if (statusEl) statusEl.textContent = data.error || "Update failed";
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function saveRobotConfigFromEditor() {
+  const editor = document.getElementById("unified-config-editor");
+  const statusEl = document.getElementById("unified-status");
+  if (!editor || !editor.value.trim()) return;
+  if (statusEl) statusEl.textContent = "Saving robot_config.yaml...";
+  try {
+    const distro = getDistro();
+    const res = await fetch("/api/robot_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml: editor.value, distro }),
+    });
+    const data = await res.json();
+    if (data.status === "saved") {
+      if (statusEl) statusEl.innerHTML = `<span style="color: var(--success);">✓ Saved ${data.path}</span>`;
+      loadRobotConfig();
+      logLine(`[console] robot_config.yaml saved (single source of truth)`);
+    } else {
+      if (statusEl) statusEl.textContent = data.error || "Save failed";
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function exportRobotConfigFile() {
+  try {
+    const distro = getDistro();
+    const res = await fetch(`/api/robot_config?distro=${distro}`);
+    const data = await res.json();
+    if (data.yaml) {
+      downloadFile("robot_config.yaml", data.yaml, "text/yaml;charset=utf-8");
+      logLine(`[console] Exported robot_config.yaml`);
+    }
+  } catch (e) {
+    alert(`Export failed: ${e.message}`);
+  }
+}
+
+// Wire Event Listeners
+document.getElementById("btn-save-robot-config-bringup")?.addEventListener("click", saveRobotConfigFromBringup);
+document.getElementById("btn-unified-load")?.addEventListener("click", loadRobotConfig);
+document.getElementById("btn-unified-save")?.addEventListener("click", saveRobotConfigFromEditor);
+document.getElementById("btn-unified-export")?.addEventListener("click", exportRobotConfigFile);
+document.getElementById("btn-export-unified")?.addEventListener("click", exportRobotConfigFile);
+
+// Sync kinematics across tabs
+document.getElementById("bringup-base-type")?.addEventListener("change", (e) => {
+  const inst = document.getElementById("install-base");
+  if (inst) inst.value = e.target.value;
+});
+document.getElementById("install-base")?.addEventListener("change", (e) => {
+  const b = document.getElementById("bringup-base-type");
+  if (b) b.value = e.target.value;
+});
+
+// Auto-load on startup
+setTimeout(() => {
+  loadRobotConfig();
+}, 400);
+

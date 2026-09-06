@@ -97,6 +97,11 @@ def generate_launch_description():
             description='Linorobot Base Serial Port'
         ),
         DeclareLaunchArgument(
+            name='micro_ros_baudrate',
+            default_value='1500000',
+            description='micro-ROS agent serial baudrate'
+        ),
+        DeclareLaunchArgument(
             name='micro_ros_transport',
             default_value='serial',
             description='micro-ROS transport'
@@ -144,7 +149,8 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(default_robot_launch_path),
             condition=UnlessCondition(LaunchConfiguration("custom_robot")),
             launch_arguments={
-                'base_serial_port': LaunchConfiguration("base_serial_port")
+                'base_serial_port': LaunchConfiguration("base_serial_port"),
+                'micro_ros_baudrate': LaunchConfiguration("micro_ros_baudrate")
             }.items()
         ),
         IncludeLaunchDescription(
