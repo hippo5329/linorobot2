@@ -1,0 +1,21 @@
+console:
+  workspace_path: "/var/home/ubuntu/linorobot2_ws"
+  ros_distro: "jazzy"
+  install_mode: "native"
+  agent_engine: "docker"
+  container_registry: "auto"
+  custom_registry: ""
+  auto_bringup: true
+  agent_transport: "serial"
+  agent_device: "/dev/ttyACM0"
+  agent_port: "8888"
+  agent_baud: "921600"
+  base_type: "2wd"
+  laser_sensor: ""
+  depth_sensor: ""
+  robot_name: "linorobot2"
+  ros_domain_id: 0
+  madgwick: true
+  laser_serial_port: ""
+  laser_baud: ""
+  depth_serial_port: ""
