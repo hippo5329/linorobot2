@@ -18,6 +18,11 @@ import os
 import sys
 import tempfile
 import unittest
+
+try:
+    import yaml  # optional: only used to assert extracted sections still parse
+except ImportError:
+    yaml = None
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
@@ -744,6 +749,56 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertEqual(parsed["container_name"], "uros-pico2-test")
         self.assertTrue(parsed["is_microros"])
 
+    def test_port_check_container_matches_only_its_own_device(self):
+        """An agent on one device must not mark every other port occupied.
+
+        The container branch used to match on the image/name alone, so a single
+        `microros/micro-ros-agent` container on /dev/ttyUSB0 reported ttyACM0 --
+        and even a nonexistent port -- as in use. It needs `docker ps
+        --no-trunc` for the device to be visible in the command at all.
+        """
+        sample = (
+            "---FUSER---\n"
+            "---CONTAINERS---\n"
+            "9602d9dbd425|uros-gendrv|microros/micro-ros-agent:jazzy|"
+            "/bin/sh /micro-ros_entrypoint.sh serial --dev /dev/ttyUSB0 -b 1500000\n"
+            "---PROCESSES---\n"
+        )
+
+        def fresh(target):
+            return {
+                "status": "ok", "in_use": False, "mode": "serial",
+                "target": target, "holder_type": "none",
+                "pids": [], "process_names": [], "container_id": "",
+                "container_name": "", "is_microros": False,
+                "details": "", "summary": "Port is available",
+            }
+
+        # the device it really holds
+        held = server._parse_port_check_output(sample, "/dev/ttyUSB0", "serial", 8888,
+                                               fresh("/dev/ttyUSB0"))
+        self.assertTrue(held["in_use"])
+        self.assertEqual(held["container_name"], "uros-gendrv")
+
+        # every other device must come back free
+        for other in ("/dev/ttyACM0", "/dev/ttyUSB1", "/dev/ttyNonExistent99"):
+            r = server._parse_port_check_output(sample, other, "serial", 8888, fresh(other))
+            self.assertFalse(r["in_use"], f"{other} wrongly reported as occupied")
+            self.assertEqual(r["summary"], "Port is available")
+
+        # A non-micro-ROS container holding a device is still detected.
+        lidar = (
+            "---FUSER---\n"
+            "---CONTAINERS---\n"
+            "fd5b17e8100a|ld19-run|ros:jazzy-ros-base|"
+            "ros2 run ldlidar_stl_ros2 ldlidar_stl_ros2_node -p port_name:=/dev/ttyUSB1\n"
+            "---PROCESSES---\n"
+        )
+        r = server._parse_port_check_output(lidar, "/dev/ttyUSB1", "serial", 8888,
+                                            fresh("/dev/ttyUSB1"))
+        self.assertTrue(r["in_use"])
+        self.assertEqual(r["container_name"], "ld19-run")
+
     def test_parse_port_check_output_fuser(self):
         sample = (
             "---FUSER---\n"
@@ -933,6 +988,41 @@ class TestLinorobot2Console(unittest.TestCase):
     # ------------------------------------------------------------------
     # Bringup health: topic- + TF-level readiness, not just pgrep
     # ------------------------------------------------------------------
+    def test_deindent_preserves_comments_below_section_indent(self):
+        """A banner comment at column 0 must keep its '#'.
+
+        deindent() used to slice min_indent characters off EVERY line, so any
+        line indented less than the section minimum lost real content -- a
+        '# ----' banner became '----', turning the extracted section into
+        invalid YAML. That silently corrupted console_ekf.yaml on save.
+        """
+        text = (
+            "ekf:\n"
+            "  ekf_filter_node:\n"
+            "    ros__parameters:\n"
+            "      frequency: 50.0\n"
+            "# ------------------------------------------------------------\n"
+            "# SLAM Toolbox Parameters\n"
+            "# ------------------------------------------------------------\n"
+            "slam:\n"
+            "  slam_toolbox:\n"
+            "    ros__parameters:\n"
+            "      resolution: 0.05\n"
+        )
+        parsed = server.parse_unified_yaml(text)
+        for section in ("ekf", "slam"):
+            body = parsed[section]
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("---") and "-----" in stripped:
+                    self.fail(f"{section}: banner comment lost its '#': {line!r}")
+            if yaml is not None:
+                # the whole point: it must still parse as YAML
+                self.assertTrue(yaml.safe_load(body), f"{section} did not parse")
+        self.assertIn("# SLAM Toolbox Parameters", parsed["ekf"])
+        self.assertIn("frequency: 50.0", parsed["ekf"])
+        self.assertIn("resolution: 0.05", parsed["slam"])
+
     def test_parse_topic_hz(self):
         # `ros2 topic hz` prints a running average; the LAST one has seen the
         # most samples, so that is the one we report.

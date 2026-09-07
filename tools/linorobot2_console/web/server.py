@@ -323,10 +323,21 @@ def parse_unified_yaml(text):
     def deindent(sec_text):
         lines = sec_text.splitlines()
         indents = [len(l) - len(l.lstrip()) for l in lines if l.strip() and not l.strip().startswith("#")]
+
+        def drop_indent(line, n):
+            # Remove at most `n` leading WHITESPACE characters. A blind
+            # line[n:] eats real content on any line indented less than the
+            # section minimum -- a banner comment sitting at column 0 loses its
+            # '#' and silently turns the extracted YAML into a syntax error.
+            i = 0
+            while i < n and i < len(line) and line[i] in " \t":
+                i += 1
+            return line[i:]
+
         if indents:
             min_indent = min(indents)
             if min_indent > 0:
-                return "\n".join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
+                return "\n".join(drop_indent(l, min_indent) for l in lines)
         return sec_text
 
     def _scalars(sec_text):
@@ -1876,12 +1887,29 @@ def _parse_port_check_output(output, port, mode, udp_port, res):
         cimg = parts[2] if len(parts) > 2 else ""
         ccmd = parts[3] if len(parts) > 3 else ""
 
+        # A container only holds THIS port if its command actually references
+        # it. Matching on the image/name alone (any "microros" image, any
+        # "uros*" container) made a single agent on /dev/ttyUSB0 report every
+        # other device -- even a nonexistent one -- as occupied.
+        looks_like_agent = (
+            "microros" in cimg or "micro_ros" in ccmd
+            or "uros_agent" in cname or "microros_agent" in cname or "uros" in cname
+        )
         is_cont_target = False
         if mode == "udp":
-            if f":{udp_port}" in ccmd or f"--port {udp_port}" in ccmd or f"{udp_port}/udp" in line or (("microros" in cimg or "uros" in cname) and "udp" in ccmd):
+            names_a_port = bool(re.search(r"--port\s+\d+|:\d+/udp|:\d{2,5}\b", ccmd + " " + line))
+            if f":{udp_port}" in ccmd or f"--port {udp_port}" in ccmd or f"{udp_port}/udp" in line:
+                is_cont_target = True
+            elif looks_like_agent and "udp" in ccmd and not names_a_port:
+                # agent in UDP mode whose command hides the port number
                 is_cont_target = True
         else:
-            if port in ccmd or port_basename in ccmd or "microros" in cimg or "uros_agent" in cname or "microros_agent" in cname or "uros" in cname:
+            names_a_device = "/dev/tty" in ccmd
+            if port in ccmd or (port_basename and port_basename in ccmd):
+                is_cont_target = True
+            elif looks_like_agent and not names_a_device:
+                # agent container whose command does not disclose its device --
+                # can't rule it out, so report it rather than miss a conflict
                 is_cont_target = True
 
         if is_cont_target:
@@ -1951,8 +1979,8 @@ def check_agent_port_status(port="/dev/ttyUSB0", mode="serial", udp_port=8888, h
             script = (
                 f"echo '---FUSER---'; fuser '{port}' 2>/dev/null || true; "
                 f"echo '---CONTAINERS---'; "
-                f"docker ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
-                f"podman ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"docker ps --no-trunc --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"podman ps --no-trunc --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
                 f"echo '---PROCESSES---'; "
                 f"pgrep -fa 'micro_ros_agent' 2>/dev/null || true"
             )
@@ -1960,8 +1988,8 @@ def check_agent_port_status(port="/dev/ttyUSB0", mode="serial", udp_port=8888, h
             script = (
                 f"echo '---FUSER---'; fuser '{udp_port}/udp' 2>/dev/null || true; "
                 f"echo '---CONTAINERS---'; "
-                f"docker ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
-                f"podman ps --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"docker ps --no-trunc --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
+                f"podman ps --no-trunc --format '{{{{.ID}}}}|{{{{.Names}}}}|{{{{.Image}}}}|{{{{.Command}}}}' 2>/dev/null || true; "
                 f"echo '---PROCESSES---'; "
                 f"ss -ulnp 'sport = :{udp_port}' 2>/dev/null || true"
             )
@@ -1986,12 +2014,12 @@ def check_agent_port_status(port="/dev/ttyUSB0", mode="serial", udp_port=8888, h
                 pass
         output_parts.append("---CONTAINERS---")
         try:
-            d = subprocess.run(["docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            d = subprocess.run(["docker", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
             output_parts.append(d.stdout)
         except Exception:
             pass
         try:
-            p = subprocess.run(["podman", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            p = subprocess.run(["podman", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
             output_parts.append(p.stdout)
         except Exception:
             pass
@@ -2010,12 +2038,12 @@ def check_agent_port_status(port="/dev/ttyUSB0", mode="serial", udp_port=8888, h
             pass
         output_parts.append("---CONTAINERS---")
         try:
-            d = subprocess.run(["docker", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            d = subprocess.run(["docker", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
             output_parts.append(d.stdout)
         except Exception:
             pass
         try:
-            p = subprocess.run(["podman", "ps", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
+            p = subprocess.run(["podman", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}|{{.Image}}|{{.Command}}"], capture_output=True, text=True, timeout=2)
             output_parts.append(p.stdout)
         except Exception:
             pass
