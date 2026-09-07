@@ -131,9 +131,19 @@ def _git(*args, cwd=None):
     return ""
 
 
+# The commit the web server was started on ("the version we start the web").
+GIT_VERSION_AT_START = (_git("rev-parse", "--short=7", "HEAD") or "unknown")[:7]
+
+
 def collect_git_info():
     """Snapshot of the linorobot2 checkout: short commit, branch, local
     branches (current pinned first), dirty flag, last 10 commits."""
+    remotes = []
+    for line in _git("remote", "-v").splitlines():
+        if "(fetch)" in line:
+            parts = line.split()
+            if len(parts) >= 2:
+                remotes.append({"name": parts[0], "url": parts[1]})
     commits = []
     log = _git("log", "-10", "--pretty=format:%h\x1f%s\x1f%an\x1f%ad\x1f%ar", "--date=short")
     for line in log.splitlines():
@@ -152,11 +162,19 @@ def collect_git_info():
     ]
     if cur_branch in branches:
         branches = [cur_branch] + [b for b in branches if b != cur_branch]
+    version = (_git("rev-parse", "--short=7", "HEAD") or "unknown")[:7]
     return {
-        "version": (_git("rev-parse", "--short=7", "HEAD") or "unknown")[:7],
+        "version": version,
+        "full": _git("rev-parse", "HEAD"),
+        "version_at_start": GIT_VERSION_AT_START,
+        "moved_since_start": (
+            version != GIT_VERSION_AT_START
+            and GIT_VERSION_AT_START != "unknown"
+        ),
         "branch": cur_branch,
         "branches": branches,
         "dirty": bool(_git("status", "--porcelain")),
+        "remotes": remotes,
         "commits": commits,
     }
 

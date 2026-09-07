@@ -78,6 +78,16 @@
         <button type="button" id="btn-branch-to-name" class="hdr-info-btn"
                 title="Set branch = robot name and check it out">= name</button>
       </div>
+      <div class="git-version-row">
+        <button id="git-version-badge" class="git-version-badge" type="button" aria-expanded="false"
+                title="Repo version the web server started on — click for branch, remotes &amp; recent commits">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/>
+          </svg>
+          <span id="git-version-text">·······</span>
+        </button>
+        <div id="git-version-popover" class="git-version-popover" hidden></div>
+      </div>
     </div>
   </div>
 

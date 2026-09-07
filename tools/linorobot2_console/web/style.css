@@ -440,3 +440,141 @@ body {
 .health-table tr:last-child td { border-bottom: none; }
 .health-table td:first-child { width: 1.5rem; text-align: center; }
 .health-table code { font-family: var(--font-mono, monospace); }
+
+/* Git Version Badge + Popover (consistent with Robot Config Engine) */
+.git-version-row {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.git-version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  background: var(--bg-card, #1e293b);
+  border: 1px solid var(--border-soft, #232b3d);
+  border-radius: 9999px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim, #8a94a8);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.git-version-badge:hover,
+.git-version-badge[aria-expanded="true"] {
+  border-color: var(--accent-primary, #6366f1);
+  color: var(--text-primary, #e7ecf6);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.35);
+}
+
+.git-version-badge.is-dirty {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.git-version-badge svg {
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.git-version-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 100;
+  width: 440px;
+  max-width: min(90vw, 480px);
+  max-height: 72vh;
+  overflow-y: auto;
+  padding: 1rem 1.1rem;
+  background: rgba(9, 13, 22, 0.98);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-soft, #232b3d);
+  border-radius: 8px;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65);
+  font-size: 0.8rem;
+  color: var(--text-primary, #e7ecf6);
+}
+
+.git-version-popover[hidden] {
+  display: none;
+}
+
+.git-version-popover h4 {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim, #8a94a8);
+  margin: 0.9rem 0 0.35rem;
+}
+
+.git-version-popover h4:first-child {
+  margin-top: 0;
+}
+
+.git-version-popover .gv-line {
+  display: flex;
+  gap: 0.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  padding: 0.12rem 0;
+}
+
+.git-version-popover .gv-key {
+  color: var(--text-dim, #8a94a8);
+  min-width: 88px;
+  flex-shrink: 0;
+}
+
+.git-version-popover .gv-val {
+  color: var(--text-primary, #e7ecf6);
+  word-break: break-all;
+}
+
+.git-version-popover .gv-remote-name {
+  color: #a5b4fc;
+}
+
+.git-version-popover ol.gv-commits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.git-version-popover ol.gv-commits li {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border-soft, #232b3d);
+}
+
+.git-version-popover ol.gv-commits li:first-child {
+  border-top: none;
+}
+
+.git-version-popover .gv-hash {
+  font-family: var(--font-mono, monospace);
+  color: #06b6d4;
+}
+
+.git-version-popover .gv-subject {
+  color: var(--text-primary, #e7ecf6);
+}
+
+.git-version-popover .gv-meta {
+  color: var(--text-dim, #8a94a8);
+  font-size: 0.7rem;
+}
+
+.git-version-popover .gv-note {
+  color: #fbbf24;
+  font-size: 0.72rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border-soft, #232b3d);
+}

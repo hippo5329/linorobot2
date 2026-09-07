@@ -279,11 +279,20 @@ refreshStatus();
 // auto-committed on the active branch before every action (server-side).
 async function loadGitInfo() {
   try {
-    const gi = await fetch("/api/gitinfo").then((r) => r.json());
+    const gi = await fetch("/api/gitinfo", { cache: "no-cache" }).then((r) => r.json());
     state.git_branch = gi.branch || state.git_branch;
     state.git_branches = gi.branches || [];
     const branchInput = document.getElementById("hdr-git-branch");
     if (branchInput && document.activeElement !== branchInput) branchInput.value = state.git_branch;
+    const text = document.getElementById("git-version-text");
+    const badge = document.getElementById("git-version-badge");
+    if (text && (gi.version_at_start || gi.version)) {
+      text.textContent = gi.version_at_start || gi.version;
+    }
+    if (badge) {
+      if (gi.dirty || gi.moved_since_start) badge.classList.add("is-dirty");
+      else badge.classList.remove("is-dirty");
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -495,6 +504,111 @@ function setupRobotBranchHeader() {
   loadGitInfo();
 }
 setupRobotBranchHeader();
+
+// =============================================================================
+// Header Git Version Badge — shows the 7-char commit the web server booted on;
+// click to reveal the branch, remotes and last 10 commits (GET /api/gitinfo).
+// =============================================================================
+function initGitVersionBadge() {
+  const badge = document.getElementById("git-version-badge");
+  const text = document.getElementById("git-version-text");
+  const popover = document.getElementById("git-version-popover");
+  if (!badge || !text || !popover) return;
+
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+
+  let loaded = null;
+
+  const render = (info) => {
+    const remotes = (info.remotes || []).map((r) => `
+      <div class="gv-line">
+        <span class="gv-remote-name">${esc(r.name)}</span>
+        <span class="gv-val">${esc(r.url)}</span>
+      </div>`).join("") || `<div class="gv-line"><span class="gv-val">(no remotes)</span></div>`;
+
+    const commits = (info.commits || []).map((c) => `
+      <li>
+        <div><span class="gv-hash">${esc(c.hash)}</span> <span class="gv-subject">${esc(c.subject)}</span></div>
+        <div class="gv-meta">${esc(c.author)} · ${esc(c.date)} (${esc(c.reldate)})</div>
+      </li>`).join("") || `<li><span class="gv-meta">(no commit history)</span></li>`;
+
+    const movedNote = info.moved_since_start
+      ? `<div class="gv-note">⚠ HEAD is now at <code>${esc(info.version)}</code> — the server is still running the <code>${esc(info.version_at_start)}</code> build. Restart server.py to pick up the new code.</div>`
+      : "";
+    const dirtyNote = info.dirty
+      ? `<div class="gv-note">Working tree has uncommitted changes.</div>`
+      : "";
+
+    popover.innerHTML = `
+      <h4>Version</h4>
+      <div class="gv-line"><span class="gv-key">server @</span><span class="gv-val">${esc(info.version_at_start || info.version)}</span></div>
+      <div class="gv-line"><span class="gv-key">branch</span><span class="gv-val">${esc(info.branch)}</span></div>
+      <h4>Remotes</h4>
+      ${remotes}
+      <h4>Last 10 commits</h4>
+      <ol class="gv-commits">${commits}</ol>
+      ${movedNote}
+      ${dirtyNote}`;
+  };
+
+  const load = async () => {
+    try {
+      const res = await fetch("/api/gitinfo", { cache: "no-cache" });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const closePopover = () => {
+    popover.hidden = true;
+    badge.setAttribute("aria-expanded", "false");
+  };
+
+  const openPopover = async () => {
+    const fresh = await load();
+    if (fresh) {
+      loaded = fresh;
+      render(loaded);
+      const branchInput = document.getElementById("hdr-git-branch");
+      if (branchInput && document.activeElement !== branchInput) {
+        branchInput.value = fresh.branch;
+      }
+    }
+    if (!loaded) return;
+    popover.hidden = false;
+    badge.setAttribute("aria-expanded", "true");
+  };
+
+  badge.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (popover.hidden) openPopover();
+    else closePopover();
+  });
+  document.addEventListener("click", (e) => {
+    if (!popover.hidden && !popover.contains(e.target) && e.target !== badge) closePopover();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !popover.hidden) closePopover();
+  });
+
+  // Prime the badge label at startup.
+  load().then((info) => {
+    if (!info) { text.textContent = "no-git"; return; }
+    loaded = info;
+    render(info);
+    text.textContent = info.version_at_start || info.version || "unknown";
+    if (info.dirty || info.moved_since_start) badge.classList.add("is-dirty");
+    const branchInput = document.getElementById("hdr-git-branch");
+    if (branchInput && document.activeElement !== branchInput) {
+      branchInput.value = info.branch;
+    }
+  });
+}
+initGitVersionBadge();
 
 // ---------- sensor registry (single source of truth) ----------
 // Everything sensor-related -- Install driver list, Bringup model codes, the

@@ -1079,5 +1079,28 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertEqual(again.count("console:"), 1)
         self.assertIn("rolling", again)
 
+    def test_git_info_shape_and_badge(self):
+        info = server.collect_git_info()
+        self.assertIn("version", info)
+        self.assertIn("version_at_start", info)
+        self.assertIn("branch", info)
+        self.assertIn("branches", info)
+        self.assertIn("remotes", info)
+        self.assertIn("commits", info)
+        self.assertEqual(len(info["version"]), 7)
+        self.assertEqual(len(info["version_at_start"]), 7)
+
+        html_path = os.path.join(server.WEB_DIR, "index.html")
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('id="git-version-badge"', html)
+        self.assertIn('id="git-version-text"', html)
+        self.assertIn('id="git-version-popover"', html)
+
+        js_path = os.path.join(server.WEB_DIR, "app.js")
+        with open(js_path, "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("initGitVersionBadge", js)
+
 if __name__ == "__main__":
     unittest.main()
