@@ -3044,6 +3044,14 @@ class Handler(BaseHTTPRequestHandler):
                              "from": src_path, "to": dst_path, "bytes": len(text)})
             return
 
+        if path == "/api/autostart/enable":
+            self._send_json(enable_autostart(data))
+            return
+
+        if path == "/api/autostart/disable":
+            self._send_json(disable_autostart())
+            return
+
         self._send_json({"error": "Not found"}, 404)
 
     def _handle_import_config(self, data):
