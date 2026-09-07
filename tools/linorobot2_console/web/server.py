@@ -9,7 +9,9 @@ per action.
 
 Usage: python3 server.py [port]
 """
+import collections
 import json
+import queue
 import math
 import os
 import platform
@@ -953,6 +955,7 @@ LASER_SENSORS = {
         "symlink": "/dev/ydlidar",
         "default_baud": "128000",
         "docker_key": "ydlidar",
+        "driver_pkg": "ydlidar_ros2_driver",
         "models": [{"code": "ydlidar", "label": "YDLIDAR X4 / G4 / others"}],
         "install": [
             "cd /tmp",
@@ -979,6 +982,7 @@ LASER_SENSORS = {
         "symlink": None,
         "default_baud": "115200",
         "docker_key": "xv11",
+        "driver_pkg": "xv_11_driver",
         "models": [{"code": "xv11", "label": "Neato XV11"}],
         "install": [
             "cd {ws}",
@@ -993,6 +997,7 @@ LASER_SENSORS = {
         "symlink": "/dev/ldlidar",
         "default_baud": "230400",
         "docker_key": "ldlidar",
+        "driver_pkg": "ldlidar_stl_ros2",
         "models": [
             {"code": "ld06", "label": "LD06", "product": "LDLiDAR_LD06", "bins": 456, "baud": "230400"},
             {"code": "ld19", "label": "LD19", "product": "LDLiDAR_LD19", "bins": 456, "baud": "230400"},
@@ -1015,6 +1020,7 @@ LASER_SENSORS = {
         "symlink": "/dev/rplidar",
         "default_baud": "115200",
         "docker_key": "rplidar",
+        "driver_pkg": "sllidar_ros2",
         "models": [
             {"code": "a1", "label": "RPLIDAR A1"},
             {"code": "a2", "label": "RPLIDAR A2"},
@@ -1561,12 +1567,41 @@ class ProcessRunner:
     Two independent instances are used -- `main` (single-shot install/build/
     launch commands) and `agent` (the long-lived micro-ROS agent) -- so the
     agent can keep running while a Bringup/Teleop/SLAM command uses `main`.
+    Maintains a rolling ring buffer of recent output lines and supports
+    broadcasting to multiple subscribers.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, max_history=1000):
         self.name = name
         self.process = None
         self.lock = threading.Lock()
+        self.max_history = max_history
+        self.history = collections.deque(maxlen=max_history)
+        self.subscribers = []
+
+    def get_history(self):
+        with self.lock:
+            return list(self.history)
+
+    def subscribe(self, q):
+        with self.lock:
+            self.subscribers.append(q)
+
+    def unsubscribe(self, q):
+        with self.lock:
+            if q in self.subscribers:
+                self.subscribers.remove(q)
+
+    def _broadcast(self, event_type, payload):
+        with self.lock:
+            if event_type == "output" and "line" in payload:
+                self.history.append(payload["line"])
+            subs = list(self.subscribers)
+        for q in subs:
+            try:
+                q.put_nowait((event_type, payload))
+            except Exception:
+                pass
 
     def is_busy(self):
         with self.lock:
@@ -1576,6 +1611,7 @@ class ProcessRunner:
         with self.lock:
             if self.process is not None and self.process.poll() is None:
                 return False
+            self.history.clear()
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             self.process = subprocess.Popen(
@@ -1592,7 +1628,9 @@ class ProcessRunner:
             for line in iter(proc.stdout.readline, ""):
                 if not line:
                     break
-                send_event("output", {"line": line.rstrip("\n")})
+                stripped = line.rstrip("\n")
+                send_event("output", {"line": stripped})
+                self._broadcast("output", {"line": stripped})
         finally:
             proc.wait()
             exit_code = proc.returncode
@@ -1600,6 +1638,7 @@ class ProcessRunner:
                 if self.process is proc:
                     self.process = None
             send_event("done", {"exit_code": exit_code})
+            self._broadcast("done", {"exit_code": exit_code})
         return True
 
     def kill(self):
@@ -2783,6 +2822,87 @@ def generate_custom_robot_specs(description):
             f"6. [SLAM Toolbox] Configured {laser_name} with {laser_max_range}m laser range and {slam_tuning['resolution']}m grid resolution."
         ]
     }
+
+def find_laser_driver_info(model_code):
+    """Find key, entry, driver_pkg for a given model code or sensor key."""
+    if not model_code:
+        return None, None, None
+    m_lower = model_code.strip().lower()
+    for key, entry in LASER_SENSORS.items():
+        if key.lower() == m_lower:
+            pkg = entry.get("driver_pkg")
+            return key, entry, pkg
+        for m in entry.get("models", []):
+            if m.get("code", "").lower() == m_lower:
+                pkg = entry.get("driver_pkg")
+                return key, entry, pkg
+    return None, None, None
+
+
+def check_sensor_driver_installed(pkg, ws=None):
+    """Check whether a ROS 2 driver package is installed in /opt/ros, workspace install, or workspace src."""
+    if not pkg:
+        return True, "No package specified"
+    ws = os.path.abspath(os.path.expanduser(ws or "~/linorobot2_ws"))
+    distro = detect_ros_distro()
+
+    # 1. System ROS install: /opt/ros/<distro>/share/<pkg>
+    if os.path.isdir(f"/opt/ros/{distro}/share/{pkg}"):
+        return True, f"Installed in /opt/ros/{distro}/share/{pkg}"
+
+    # 2. Workspace install: <ws>/install/<pkg>
+    if os.path.isdir(os.path.join(ws, "install", pkg)):
+        return True, f"Installed in {ws}/install/{pkg}"
+
+    # 3. Workspace source: <ws>/src/<pkg>
+    if os.path.isdir(os.path.join(ws, "src", pkg)):
+        return True, f"Source tree found in {ws}/src/{pkg}"
+
+    # 4. Check via ros2 CLI if accessible in environment
+    try:
+        res = subprocess.run(["ros2", "pkg", "prefix", pkg], capture_output=True, text=True, timeout=2.0)
+        if res.returncode == 0 and res.stdout.strip():
+            return True, f"Found via ros2 pkg prefix: {res.stdout.strip()}"
+    except Exception:
+        pass
+
+    return False, f"Package '{pkg}' not found in /opt/ros/{distro} or workspace {ws}"
+
+
+def get_sensor_driver_status(sensor_code, ws=None):
+    """Full driver status info dictionary for the frontend."""
+    if not sensor_code:
+        return {"sensor": "", "package": None, "installed": True, "reason": "No sensor configured"}
+    ws = ws or os.path.expanduser("~/linorobot2_ws")
+    key, entry, pkg = find_laser_driver_info(sensor_code)
+    if not pkg:
+        return {"sensor": sensor_code, "key": key, "package": None, "installed": True, "needs_driver": False, "reason": "No separate ROS 2 driver package required"}
+
+    installed, reason = check_sensor_driver_installed(pkg, ws=ws)
+    install_cmd = build_sensor_install_cmd("laser", key, ws=ws) if (not installed and key) else None
+    return {
+        "sensor": sensor_code,
+        "key": key,
+        "package": pkg,
+        "installed": installed,
+        "needs_driver": True,
+        "reason": reason,
+        "install_cmd": install_cmd
+    }
+
+
+def _find_bringup_container():
+    for engine in ["docker", "podman"]:
+        if shutil.which(engine):
+            try:
+                res = subprocess.run([engine, "ps", "--filter", "name=bringup", "--format", "{{.Names}}"], capture_output=True, text=True, timeout=2.0)
+                if res.returncode == 0 and "bringup" in res.stdout:
+                    return True, engine
+            except Exception:
+                pass
+    return False, None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Linorobot2Console/0.1"
 
@@ -2999,11 +3119,96 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"maps": maps, "maps_dir": maps_dir})
             return
 
+        if path == "/api/bringup/stream":
+            self._handle_bringup_stream()
+            return
+
+        if path == "/api/sensors/driver_status":
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            sensor = q.get("sensor", "")
+            ws_path = q.get("ws", "")
+            self._send_json(get_sensor_driver_status(sensor, ws=ws_path))
+            return
+
         if path == "/api/lidar_stream":
             self._handle_lidar_stream()
             return
 
         self._serve_static(path)
+
+    def _handle_bringup_stream(self):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        def send_sse(event, data_dict):
+            payload = json.dumps(data_dict)
+            try:
+                self.wfile.write(f"event: {event}\ndata: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError):
+                return False
+
+        if bringup_runner.is_busy():
+            history = bringup_runner.get_history()
+            if not send_sse("init", {"status": "running", "source": "native", "history_count": len(history)}):
+                return
+            for line in history:
+                if not send_sse("output", {"line": line}):
+                    return
+            sub_q = queue.Queue(maxsize=1000)
+            bringup_runner.subscribe(sub_q)
+            try:
+                while bringup_runner.is_busy():
+                    try:
+                        ev_type, payload = sub_q.get(timeout=1.0)
+                        if not send_sse(ev_type, payload):
+                            break
+                        if ev_type == "done":
+                            break
+                    except queue.Empty:
+                        try:
+                            self.wfile.write(b": ping\n\n")
+                            self.wfile.flush()
+                        except Exception:
+                            break
+            finally:
+                bringup_runner.unsubscribe(sub_q)
+            return
+
+        container_alive, engine = _find_bringup_container()
+        if container_alive:
+            if not send_sse("init", {"status": "running", "source": engine, "container": "bringup"}):
+                return
+            try:
+                proc = subprocess.Popen(
+                    [engine, "logs", "-f", "--tail", "200", "bringup"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                try:
+                    for line in iter(proc.stdout.readline, ""):
+                        if not line:
+                            break
+                        if not send_sse("output", {"line": line.rstrip("\n")}):
+                            break
+                finally:
+                    proc.terminate()
+                    proc.wait()
+            except Exception as e:
+                send_sse("output", {"line": f"[console] Error attaching to container logs: {e}"})
+            return
+
+        history = bringup_runner.get_history()
+        send_sse("idle", {"status": "idle", "history": history[-50:] if history else []})
+
 
     def _stream_command(self, command, runner, action_label=None):
         if not command:
@@ -3755,3 +3960,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Backwards-compatible alias
+ConsoleHandler = Handler

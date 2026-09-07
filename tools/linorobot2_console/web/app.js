@@ -28,6 +28,18 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function openTerminal(title) {
+  if (consoleWrap && consoleWrap.classList.contains("collapsed")) {
+    consoleWrap.classList.remove("collapsed");
+  }
+  if (title) {
+    setConsoleTitle(title);
+  }
+  if (consolePane) {
+    consolePane.scrollTop = consolePane.scrollHeight;
+  }
+}
+
 function logLine(text) {
   consolePane.textContent += text + "\n";
   consolePane.scrollTop = consolePane.scrollHeight;
@@ -58,7 +70,7 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 // slot: "main" -> /api/exec ; "agent" -> /api/agent/exec
 function runCommand(command, { slot = "main", title = "Running", action, onDone, onLine } = {}) {
   const endpoint = slot === "agent" ? "/api/agent/exec" : (slot === "bringup" ? "/api/bringup/exec" : "/api/exec");
-  setConsoleTitle(title);
+  openTerminal(title);
   logLine(`$ [${slot}] ${title}`);
   return fetch(endpoint, {
     method: "POST",
@@ -1212,7 +1224,29 @@ async function ensureBringupRunning() {
     logLine("[console] Robot Bringup is already active.");
     return;
   }
+
+  // Pre-flight check: Warn if native workspace has not been built yet
+  if (!isDockerMode() && state.status && state.status.workspace_built === false) {
+    openTerminal("Robot Bringup: Pre-flight check");
+    logLine(`[console] ⚠ Workspace is not built yet (${ws()}/install/setup.bash missing).`);
+    logLine("[console] linorobot2_bringup and base packages will not be found until the workspace is built.");
+    logLine("[console] Switch Install Mode to Docker in Configuration or build workspace via 'Base install'.");
+  }
+
+  // Pre-flight check: Auto-detect and auto-install missing LiDAR driver
+  const laser = document.getElementById("bringup-laser-sensor")?.value || (state.config && state.config.laser_sensor);
+  if (laser && !isDockerMode()) {
+    openTerminal(`Checking LiDAR Driver: ${laser}`);
+    const driverOk = await checkAndInstallLidarDriver(laser);
+    if (!driverOk) {
+      logLine(`[console] ⚠ LiDAR driver check failed for '${laser}'. Continuing bringup anyway...`);
+    }
+  }
+
   logLine("[console] Action requires Robot Bringup -- automatically starting Bringup in background...");
+  openTerminal("Robot Bringup (Auto-Started) [streaming]");
+  attachBringupStream();
+
   const cmd = bringupLaunchCommand();
   return new Promise((resolve) => {
     const startBtn = document.getElementById("btn-bringup-start");
@@ -1228,6 +1262,10 @@ async function ensureBringupRunning() {
         if (stopBtn) stopBtn.disabled = true;
         if (state.status) state.status.bringup_busy_console = false;
         refreshStatus();
+        if (exitCode !== 0) {
+          openTerminal("Robot Bringup [Exited with error]");
+          logLine(`[console] ✖ Bringup process exited with error code ${exitCode}. Check output above.`);
+        }
       },
     });
 
@@ -1238,12 +1276,6 @@ async function ensureBringupRunning() {
       pill.className = "pill pill-starting";
     }
 
-    // Poll for the bringup process to actually appear rather than assuming a
-    // fixed delay is enough. Resolves as soon as the server reports bringup
-    // alive (our runner or an external process), waits a short settle, and
-    // gives up after a bounded timeout so a stuck launch can't hang the caller.
-    // NOTE: this confirms the *process* is up, not that /odom and TF are
-    // flowing -- a topic-level readiness check is the deeper fix.
     const startedAt = Date.now();
     const DEADLINE_MS = 40000;
     const poll = async () => {
@@ -1261,7 +1293,7 @@ async function ensureBringupRunning() {
         logLine(
           alive
             ? `[console] Robot Bringup detected after ${(waited / 1000).toFixed(1)}s. Proceeding with requested action...`
-            : `[console] Bringup not confirmed after ${(DEADLINE_MS / 1000)}s -- proceeding anyway.`
+            : `[console] Bringup not confirmed after ${(DEADLINE_MS / 1000)}s -- proceeding anyway. Check streaming logs above.`
         );
         // brief settle so nodes/agent finish binding before the caller launches
         setTimeout(resolve, 2000);
@@ -1273,13 +1305,116 @@ async function ensureBringupRunning() {
   });
 }
 
+
+// ---------- bringup log streaming & lidar driver auto-install ----------
+let bringupEventSource = null;
+
+function attachBringupStream() {
+  if (bringupEventSource) return;
+  openTerminal("Robot Bringup [streaming]");
+  try {
+    bringupEventSource = new EventSource("/api/bringup/stream");
+    bringupEventSource.addEventListener("init", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.status === "running") {
+          openTerminal(`Robot Bringup [${data.source || 'running'}]`);
+        }
+      } catch (_) {}
+    });
+    bringupEventSource.addEventListener("output", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.line != null) {
+          logLine(`[bringup] ${data.line}`);
+        }
+      } catch (_) {}
+    });
+    bringupEventSource.addEventListener("done", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        logLine(`[bringup] exited with code ${data.exit_code}`);
+      } catch (_) {}
+      if (bringupEventSource) {
+        bringupEventSource.close();
+        bringupEventSource = null;
+      }
+      refreshStatus();
+    });
+    bringupEventSource.addEventListener("idle", () => {
+      if (bringupEventSource) {
+        bringupEventSource.close();
+        bringupEventSource = null;
+      }
+    });
+    bringupEventSource.onerror = () => {
+      if (bringupEventSource) {
+        bringupEventSource.close();
+        bringupEventSource = null;
+      }
+    };
+  } catch (err) {
+    console.error("Error attaching bringup stream:", err);
+  }
+}
+
+async function checkAndInstallLidarDriver(laserSensor) {
+  if (!laserSensor || isDockerMode()) return true;
+  try {
+    const res = await fetch(`/api/sensors/driver_status?sensor=${encodeURIComponent(laserSensor)}&ws=${encodeURIComponent(ws())}`);
+    if (!res.ok) return true;
+    const info = await res.json();
+    if (!info.installed && info.package && info.install_cmd) {
+      openTerminal(`Installing LiDAR Driver (${info.package})`);
+      logLine(`[console] -------------------------------------------------------------`);
+      logLine(`[console] LiDAR '${laserSensor}' requires ROS 2 package '${info.package}'.`);
+      logLine(`[console] Driver package was not found in ROS 2 or workspace ${ws()}.`);
+      logLine(`[console] Automatically installing and building driver before bringup...`);
+      logLine(`[console] -------------------------------------------------------------`);
+      
+      const success = await new Promise((resolve) => {
+        runCommand(envPrefix() + `cd ${ws()} && ` + info.install_cmd, {
+          title: `Install LiDAR Driver: ${info.package}`,
+          action: `install driver ${info.package}`,
+          onDone: (exitCode) => {
+            if (exitCode === 0) {
+              logLine(`[console] ✓ LiDAR driver '${info.package}' installed successfully!`);
+              resolve(true);
+            } else {
+              logLine(`[console] ⚠ LiDAR driver install returned exit code ${exitCode}.`);
+              resolve(false);
+            }
+          }
+        });
+      });
+      return success;
+    }
+  } catch (e) {
+    console.warn("Driver pre-flight check failed:", e);
+  }
+  return true;
+}
+
 // ---------- bringup ----------
+const btnBringupLogs = document.getElementById("btn-bringup-logs");
+if (btnBringupLogs) {
+  btnBringupLogs.addEventListener("click", () => attachBringupStream());
+}
+
 wireStartStop({
   startBtn: document.getElementById("btn-bringup-start"),
   stopBtn: document.getElementById("btn-bringup-stop"),
   slot: "bringup",
   title: "Bringup",
-  buildCommand: async () => bringupLaunchCommand(),
+  buildCommand: async () => {
+    const laser = document.getElementById("bringup-laser-sensor")?.value || (state.config && state.config.laser_sensor);
+    if (laser && !isDockerMode()) {
+      await checkAndInstallLidarDriver(laser);
+    }
+    openTerminal("Robot Bringup [streaming]");
+    attachBringupStream();
+    return bringupLaunchCommand();
+  },
 });
 
 // ---------- bringup health (topic + TF level, not just pgrep) ----------

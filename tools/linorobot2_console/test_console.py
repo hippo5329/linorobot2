@@ -1,3 +1,5 @@
+import threading
+import urllib.request
 #!/usr/bin/env python3
 # Copyright (c) 2026 Linorobot contributors
 #
@@ -1126,6 +1128,89 @@ class TestLinorobot2Console(unittest.TestCase):
             js = f.read()
         self.assertIn("getContainerRegistry", js)
         self.assertIn("syncRegistryState", js)
+
+
+    def test_process_runner_rolling_buffer_and_subscribers(self):
+        runner = server.ProcessRunner("test_runner", max_history=10)
+        self.assertEqual(runner.get_history(), [])
+        
+        # Test broadcast and history
+        runner._broadcast("output", {"line": "line 1"})
+        runner._broadcast("output", {"line": "line 2"})
+        self.assertEqual(runner.get_history(), ["line 1", "line 2"])
+        
+        # Test subscriber queue
+        import queue
+        q = queue.Queue()
+        runner.subscribe(q)
+        runner._broadcast("output", {"line": "line 3"})
+        self.assertFalse(q.empty())
+        ev, payload = q.get_nowait()
+        self.assertEqual(ev, "output")
+        self.assertEqual(payload["line"], "line 3")
+        
+        runner.unsubscribe(q)
+        runner._broadcast("output", {"line": "line 4"})
+        self.assertTrue(q.empty())
+
+    def test_sensor_driver_status_resolution(self):
+        # 1. ldlidar -> ldlidar_stl_ros2
+        key, entry, pkg = server.find_laser_driver_info("ld19")
+        self.assertEqual(key, "ldlidar")
+        self.assertEqual(pkg, "ldlidar_stl_ros2")
+        
+        # 2. rplidar / sllidar -> sllidar_ros2
+        key, entry, pkg = server.find_laser_driver_info("a1")
+        self.assertEqual(key, "sllidar")
+        self.assertEqual(pkg, "sllidar_ros2")
+        
+        # 3. ydlidar -> ydlidar_ros2_driver
+        key, entry, pkg = server.find_laser_driver_info("ydlidar")
+        self.assertEqual(key, "ydlidar")
+        self.assertEqual(pkg, "ydlidar_ros2_driver")
+        
+        # 4. Status dictionary format
+        status = server.get_sensor_driver_status("ld19", ws="/tmp/dummy_ws")
+        self.assertEqual(status["sensor"], "ld19")
+        self.assertEqual(status["package"], "ldlidar_stl_ros2")
+        self.assertIn("installed", status)
+        self.assertIn("reason", status)
+        self.assertIn("install_cmd", status)
+        self.assertIn("git clone", status["install_cmd"])
+
+    def test_bringup_stream_endpoint_idle(self):
+        # Verify /api/bringup/stream endpoint is registered and responds
+        srv = server.ThreadingHTTPServer(("127.0.0.1", 0), server.ConsoleHandler)
+        port = srv.server_port
+        t = threading.Thread(target=srv.serve_forever)
+        t.daemon = True
+        t.start()
+        try:
+            url = f"http://127.0.0.1:{port}/api/bringup/stream"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+                first_chunk = resp.read(100).decode("utf-8")
+                self.assertTrue("event: idle" in first_chunk or "event: init" in first_chunk)
+        finally:
+            srv.shutdown()
+
+    def test_sensors_driver_status_endpoint(self):
+        srv = server.ThreadingHTTPServer(("127.0.0.1", 0), server.ConsoleHandler)
+        port = srv.server_port
+        t = threading.Thread(target=srv.serve_forever)
+        t.daemon = True
+        t.start()
+        try:
+            url = f"http://127.0.0.1:{port}/api/sensors/driver_status?sensor=ld19"
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["package"], "ldlidar_stl_ros2")
+                self.assertIn("installed", data)
+        finally:
+            srv.shutdown()
 
 if __name__ == "__main__":
     unittest.main()
