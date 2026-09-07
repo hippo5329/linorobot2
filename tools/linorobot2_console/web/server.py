@@ -905,6 +905,8 @@ DEFAULT_CONFIG = {
     "ros_distro": "jazzy",
     "install_mode": "native",       # "native" | "docker" | "podman"
     "agent_engine": "docker",       # "docker" | "podman_systemd" | "podman" | "native"
+    "container_registry": "auto",   # "auto" | "cluster" | "dockerhub" | custom
+    "custom_registry": "",
     "auto_bringup": True,
     "agent_transport": "serial",   # "serial" | "udp4"
     "agent_device": "/dev/ttyACM0",

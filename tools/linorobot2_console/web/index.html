@@ -50,6 +50,16 @@
           <option value="native">Native (ROS 2 / ~/uros_ws)</option>
         </select>
       </div>
+      <div class="hdr-field hdr-wf-field" title="Container Registry for Docker Images">
+        <label for="hdr-container-registry">📦 Registry:</label>
+        <select id="hdr-container-registry" class="hdr-select">
+          <option value="auto" selected>Auto (Cluster / Hub)</option>
+          <option value="cluster">Cluster (registry-1632)</option>
+          <option value="dockerhub">Docker Hub (Direct)</option>
+          <option value="custom">Custom...</option>
+        </select>
+        <input type="text" id="hdr-custom-registry" class="hdr-input" placeholder="host:port" style="display:none; width:110px;" autocomplete="off" spellcheck="false">
+      </div>
       <div class="hdr-field hdr-wf-field" title="micro-ROS Agent Status & Port Conflict Check">
         <label>⚡ Agent:</label>
         <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span>
@@ -748,6 +758,17 @@
           </select>
         </label>
         <button type="button" class="btn" id="btn-settings-rootless-guide">❓ Rootless Guide</button>
+      </div>
+      <div class="row" style="align-items: flex-end; gap: 10px; margin-top: 8px;">
+        <label style="flex: 1;">Container Registry
+          <select id="cfg-container-registry">
+            <option value="auto" selected>Auto (Cluster probe, fallback to Docker Hub)</option>
+            <option value="cluster">Cluster (registry-1632.tail711f99.ts.net)</option>
+            <option value="dockerhub">Docker Hub (Direct / Official)</option>
+            <option value="custom">Custom Registry...</option>
+          </select>
+        </label>
+        <input type="text" id="cfg-custom-registry" placeholder="hostname:port" style="display:none; flex:1; max-width:200px;">
       </div>
       <input type="checkbox" id="cfg-agent-use-docker" checked style="display:none;">
       <div class="row">

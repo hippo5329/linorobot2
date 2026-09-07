@@ -1102,5 +1102,30 @@ class TestLinorobot2Console(unittest.TestCase):
             js = f.read()
         self.assertIn("initGitVersionBadge", js)
 
+    def test_container_registry_configurable(self):
+        # 1. Config defaults and YAML rendering
+        self.assertIn("container_registry", server.DEFAULT_CONFIG)
+        self.assertEqual(server.DEFAULT_CONFIG["container_registry"], "auto")
+        self.assertIn("custom_registry", server.DEFAULT_CONFIG)
+        yaml_sec = server.render_console_section({"container_registry": "cluster", "custom_registry": "reg.local:5000"})
+        self.assertIn('container_registry: "cluster"', yaml_sec)
+        self.assertIn('custom_registry: "reg.local:5000"', yaml_sec)
+
+        # 2. HTML elements
+        html_path = os.path.join(server.WEB_DIR, "index.html")
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn('id="hdr-container-registry"', html)
+        self.assertIn('id="hdr-custom-registry"', html)
+        self.assertIn('id="cfg-container-registry"', html)
+        self.assertIn('id="cfg-custom-registry"', html)
+
+        # 3. JS helper
+        js_path = os.path.join(server.WEB_DIR, "app.js")
+        with open(js_path, "r", encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("getContainerRegistry", js)
+        self.assertIn("syncRegistryState", js)
+
 if __name__ == "__main__":
     unittest.main()

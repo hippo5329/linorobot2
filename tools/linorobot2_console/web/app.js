@@ -266,6 +266,25 @@ async function refreshStatus() {
         if (hdrA && !localStorage.getItem("linorobot2_agent_engine")) hdrA.value = c.agent_engine;
         if (cfgA && !localStorage.getItem("linorobot2_agent_engine")) cfgA.value = c.agent_engine;
       }
+
+      if (c.container_registry) {
+        const hdrR = document.getElementById("hdr-container-registry");
+        const cfgR = document.getElementById("cfg-container-registry");
+        const regMode = (c.container_registry === "custom" || (!["auto", "cluster", "dockerhub"].includes(c.container_registry))) ? "custom" : c.container_registry;
+        const customVal = c.custom_registry || (!["auto", "cluster", "dockerhub"].includes(c.container_registry) ? c.container_registry : "");
+        if (hdrR && !localStorage.getItem("linorobot2_container_registry")) hdrR.value = regMode;
+        if (cfgR && !localStorage.getItem("linorobot2_container_registry")) cfgR.value = regMode;
+        const hdrCust = document.getElementById("hdr-custom-registry");
+        const cfgCust = document.getElementById("cfg-custom-registry");
+        if (hdrCust) {
+          if (!localStorage.getItem("linorobot2_custom_registry")) hdrCust.value = customVal;
+          hdrCust.style.display = (regMode === "custom") ? "inline-block" : "none";
+        }
+        if (cfgCust) {
+          if (!localStorage.getItem("linorobot2_custom_registry")) cfgCust.value = customVal;
+          cfgCust.style.display = (regMode === "custom") ? "block" : "none";
+        }
+      }
     }
   } catch (e) {
     // server not reachable yet / transient -- ignore, next poll will retry
@@ -403,6 +422,8 @@ async function selectRobot(name) {
     put("hdr-agent-engine", c.agent_engine);
     put("install-mode", c.install_mode);
     put("cfg-agent-engine", c.agent_engine);
+    put("hdr-container-registry", c.container_registry);
+    put("cfg-container-registry", c.container_registry);
     logLine(`[console] active robot -> ${res.active}  (${res.robot_config_path})`);
     refreshStatus();
   } catch (e) {
@@ -986,26 +1007,67 @@ function getAgentEngine() {
   return (state.config && state.config.agent_engine) || "docker";
 }
 
+function getContainerRegistry() {
+  const hdr = document.getElementById("hdr-container-registry");
+  const hdrCustom = document.getElementById("hdr-custom-registry");
+  if (hdr && hdr.value === "custom" && hdrCustom && hdrCustom.value.trim()) {
+    return hdrCustom.value.trim();
+  }
+  if (hdr && hdr.value) return hdr.value;
+  const cfg = document.getElementById("cfg-container-registry");
+  const cfgCustom = document.getElementById("cfg-custom-registry");
+  if (cfg && cfg.value === "custom" && cfgCustom && cfgCustom.value.trim()) {
+    return cfgCustom.value.trim();
+  }
+  if (cfg && cfg.value) return cfg.value;
+  return (state.config && state.config.container_registry) || "auto";
+}
+
 function findOrBuildAgentCommand() {
   const engine = getAgentEngine();
   if (engine === "docker" || engine === "podman" || engine === "podman_systemd") {
     const bin = (engine === "docker") ? "docker" : "podman";
+    const regMode = getContainerRegistry();
+    const customReg = (document.getElementById("hdr-custom-registry")?.value || document.getElementById("cfg-custom-registry")?.value || (state.config && state.config.custom_registry) || "").trim();
+
+    let probeList = [];
+    if (regMode === "cluster") {
+      probeList = ['"registry-1632.tail711f99.ts.net"', '"100.96.255.6:5000"'];
+    } else if (regMode === "dockerhub") {
+      probeList = [];
+    } else if (regMode !== "auto" && regMode !== "custom") {
+      probeList = [`"${regMode}"`];
+    } else if (regMode === "custom" && customReg) {
+      probeList = [`"${customReg}"`];
+    } else {
+      // auto
+      probeList = ['"registry-1632.tail711f99.ts.net"', '"100.96.255.6:5000"'];
+    }
+
+    let pullBlock = "";
+    if (probeList.length > 0) {
+      pullBlock = `REG_PULLED=0; ` +
+        `for reg in ${probeList.join(" ")}; do ` +
+        `  if curl -fsSL -m 2 "https://$reg/v2/" >/dev/null 2>&1 || curl -fsSL -m 2 "http://$reg/v2/" >/dev/null 2>&1; then ` +
+        `    echo ">>> Container registry active at $reg. Pulling $reg/$IMG..."; ` +
+        `    if ${bin} pull "$reg/$IMG" >/dev/null 2>&1; then ` +
+        `      ${bin} tag "$reg/$IMG" "$IMG"; REG_PULLED=1; break; ` +
+        `    fi; ` +
+        `  fi; ` +
+        `done; ` +
+        `if [ "$REG_PULLED" -eq 0 ]; then ` +
+        `  echo ">>> Pulling $IMG from upstream..."; ` +
+        `  ${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; ` +
+        `fi; `;
+    } else {
+      pullBlock = `echo ">>> Pulling $IMG from Docker Hub directly..."; ` +
+        `${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; `;
+    }
+
     return `echo ">>> micro-ROS agent: using ${bin} container image (skipping build from source)"; ` +
       `if ! command -v ${bin} >/dev/null 2>&1; then echo "ERROR: ${bin} is not installed" >&2; exit 1; fi; ` +
       `IMG="microros/micro-ros-agent:${state.status?.ros_distro || "jazzy"}"; ` +
-      `REG_PULLED=0; ` +
-      `for reg in "registry-1632.tail711f99.ts.net" "100.96.255.6:5000"; do ` +
-      `  if curl -fsSL -m 2 "https://$reg/v2/" >/dev/null 2>&1 || curl -fsSL -m 2 "http://$reg/v2/" >/dev/null 2>&1; then ` +
-      `    echo ">>> Cluster registry active at $reg. Pulling $reg/$IMG..."; ` +
-      `    if ${bin} pull "$reg/$IMG" >/dev/null 2>&1; then ` +
-      `      ${bin} tag "$reg/$IMG" "$IMG"; REG_PULLED=1; break; ` +
-      `    fi; ` +
-      `  fi; ` +
-      `done; ` +
-      `if [ "$REG_PULLED" -eq 0 ]; then ` +
-      `  echo ">>> Pulling $IMG from upstream..."; ` +
-      `  ${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; ` +
-      `fi; ` +
+      pullBlock +
       `echo AGENT_DOCKER_READY`;
   }
   return envPrefix() + [
@@ -2800,6 +2862,60 @@ function initWorkflowSetup() {
   if (cfgAgent) {
     cfgAgent.addEventListener("change", () => onAgentEngineChange(cfgAgent.value));
   }
+
+  // 4. Container Registry Sync
+  const hdrReg = document.getElementById("hdr-container-registry");
+  const hdrCustomReg = document.getElementById("hdr-custom-registry");
+  const cfgReg = document.getElementById("cfg-container-registry");
+  const cfgCustomReg = document.getElementById("cfg-custom-registry");
+
+  const syncRegistryState = (val, customVal) => {
+    const isCustom = (val === "custom");
+    if (hdrReg) hdrReg.value = val;
+    if (cfgReg) cfgReg.value = val;
+    if (hdrCustomReg) {
+      if (customVal !== undefined) hdrCustomReg.value = customVal;
+      hdrCustomReg.style.display = isCustom ? "inline-block" : "none";
+      if (isCustom) hdrCustomReg.focus();
+    }
+    if (cfgCustomReg) {
+      if (customVal !== undefined) cfgCustomReg.value = customVal;
+      cfgCustomReg.style.display = isCustom ? "block" : "none";
+    }
+  };
+
+  const savedReg = localStorage.getItem("linorobot2_container_registry");
+  const savedCustomReg = localStorage.getItem("linorobot2_custom_registry");
+  if (savedReg) {
+    syncRegistryState(savedReg, savedCustomReg || "");
+  }
+
+  const onRegistryChange = (val) => {
+    syncRegistryState(val);
+    localStorage.setItem("linorobot2_container_registry", val);
+    const custom = (hdrCustomReg ? hdrCustomReg.value : (cfgCustomReg ? cfgCustomReg.value : "")).trim();
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ container_registry: val, custom_registry: custom }),
+    }).then(refreshStatus);
+  };
+
+  const onCustomRegistryInput = (custom) => {
+    if (hdrCustomReg) hdrCustomReg.value = custom;
+    if (cfgCustomReg) cfgCustomReg.value = custom;
+    localStorage.setItem("linorobot2_custom_registry", custom);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_registry: custom }),
+    });
+  };
+
+  if (hdrReg) hdrReg.addEventListener("change", () => onRegistryChange(hdrReg.value));
+  if (cfgReg) cfgReg.addEventListener("change", () => onRegistryChange(cfgReg.value));
+  if (hdrCustomReg) hdrCustomReg.addEventListener("input", () => onCustomRegistryInput(hdrCustomReg.value));
+  if (cfgCustomReg) cfgCustomReg.addEventListener("input", () => onCustomRegistryInput(cfgCustomReg.value));
 
   // 4. Modal listeners
   if (btnRootlessHdr) btnRootlessHdr.addEventListener("click", openRootlessModal);
