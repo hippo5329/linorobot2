@@ -993,8 +993,19 @@ function findOrBuildAgentCommand() {
     return `echo ">>> micro-ROS agent: using ${bin} container image (skipping build from source)"; ` +
       `if ! command -v ${bin} >/dev/null 2>&1; then echo "ERROR: ${bin} is not installed" >&2; exit 1; fi; ` +
       `IMG="microros/micro-ros-agent:${state.status?.ros_distro || "jazzy"}"; ` +
-      `echo ">>> Pulling $IMG..."; ` +
-      `${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; ` +
+      `REG_PULLED=0; ` +
+      `for reg in "registry-1632.tail711f99.ts.net" "100.96.255.6:5000"; do ` +
+      `  if curl -fsSL -m 2 "https://$reg/v2/" >/dev/null 2>&1 || curl -fsSL -m 2 "http://$reg/v2/" >/dev/null 2>&1; then ` +
+      `    echo ">>> Cluster registry active at $reg. Pulling $reg/$IMG..."; ` +
+      `    if ${bin} pull "$reg/$IMG" >/dev/null 2>&1; then ` +
+      `      ${bin} tag "$reg/$IMG" "$IMG"; REG_PULLED=1; break; ` +
+      `    fi; ` +
+      `  fi; ` +
+      `done; ` +
+      `if [ "$REG_PULLED" -eq 0 ]; then ` +
+      `  echo ">>> Pulling $IMG from upstream..."; ` +
+      `  ${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; ` +
+      `fi; ` +
       `echo AGENT_DOCKER_READY`;
   }
   return envPrefix() + [
