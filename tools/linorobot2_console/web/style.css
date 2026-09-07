@@ -425,3 +425,18 @@ body {
   opacity: 1;
   bottom: 40px;
 }
+
+/* Bringup health check results */
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.health-table td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+.health-table tr:last-child td { border-bottom: none; }
+.health-table td:first-child { width: 1.5rem; text-align: center; }
+.health-table code { font-family: var(--font-mono, monospace); }

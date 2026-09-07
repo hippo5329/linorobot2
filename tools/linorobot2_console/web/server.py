@@ -1659,6 +1659,184 @@ def bringup_externally_alive():
     return False
 
 
+# ---------------------------------------------------------------------------
+# Bringup health: is the robot actually PUBLISHING, or is it just a live process?
+#
+# A running bringup process proves nothing -- the microcontroller may be
+# unplugged, the agent may not have a session, the LiDAR may be on the wrong
+# port. This probes the ROS graph itself: rate on /odom (raw + EKF-filtered),
+# /imu/data and /scan, plus the map->odom->base_link->laser TF chain.
+# ---------------------------------------------------------------------------
+BRINGUP_HEALTH_TOPICS = [
+    # (key,        topic,             what it proves,                     min_hz)
+    ("odom_raw",   "/odom/unfiltered", "microcontroller wheel odometry",   5.0),
+    ("odom",       "/odom",            "EKF-fused odometry",               5.0),
+    ("imu",        "/imu/data",        "IMU / attitude filter",            5.0),
+    ("scan",       "/scan",            "LiDAR scans",                      1.0),
+]
+
+BRINGUP_TF_CHAIN = [
+    ("odom", "base_footprint"),   # published by the EKF
+    ("base_footprint", "laser"),  # published by the robot description
+]
+
+
+def _ros_env_prefix(cfg=None, distro=None):
+    """`source` line pair that puts ros2 on PATH for a subprocess `bash -lc`."""
+    cfg = cfg or load_config()
+    distro = distro or detect_ros_distro()
+    ws = cfg.get("workspace_path") or os.path.expanduser("~/linorobot2_ws")
+    return (
+        f"source /opt/ros/{distro}/setup.bash 2>/dev/null || true; "
+        f"[ -f {shlex.quote(ws)}/install/setup.bash ] && "
+        f"source {shlex.quote(ws)}/install/setup.bash 2>/dev/null || true; "
+        f"export ROS_DOMAIN_ID={int(cfg.get('ros_domain_id') or 0)}; "
+    )
+
+
+def _parse_topic_hz(output):
+    """Average rate out of `ros2 topic hz` output, or None if it never printed
+    one (no publisher, or nothing published inside the window)."""
+    m = None
+    for line in output.splitlines():
+        hit = re.search(r"average rate:\s*([0-9]+\.?[0-9]*)", line)
+        if hit:
+            m = hit  # keep the last one -- it has seen the most samples
+    return float(m.group(1)) if m else None
+
+
+def check_bringup_health(timeout=4.0):
+    """Topic- and TF-level bringup readiness.
+
+    Returns {status, ready, topics: {...}, tf: [...], summary}. `ready` is True
+    only when odometry, the IMU and the TF chain are live -- the LiDAR is
+    reported but not required (a robot may legitimately run without one).
+    """
+    res = {
+        "status": "ok",
+        "ready": False,
+        "ros_available": False,
+        "topics": {},
+        "tf": [],
+        "summary": "",
+    }
+    cfg = load_config()
+    prefix = _ros_env_prefix(cfg)
+
+    if not shutil.which("ros2") and not os.path.isdir(f"/opt/ros/{detect_ros_distro()}"):
+        res["status"] = "no_ros"
+        res["summary"] = "ROS 2 not found on this machine"
+        return res
+
+    # One `ros2 topic list` tells us which of the expected topics even exist,
+    # so we only pay the per-topic hz timeout for topics that have a publisher.
+    try:
+        listed = subprocess.run(
+            ["bash", "-lc", prefix + "ros2 topic list 2>/dev/null"],
+            capture_output=True, text=True, timeout=timeout + 2,
+        )
+        present = {t.strip() for t in listed.stdout.splitlines() if t.strip()}
+        res["ros_available"] = listed.returncode == 0 and bool(present)
+    except Exception as e:
+        res["status"] = "error"
+        res["summary"] = f"could not query the ROS graph: {e}"
+        return res
+
+    if not res["ros_available"]:
+        # No usable ROS graph at all: report that plainly instead of running
+        # (and misreporting) four topic probes and two tf2_echo calls.
+        res["status"] = "no_graph"
+        res["topics"] = {
+            key: {"topic": topic, "what": what, "min_hz": min_hz,
+                  "advertised": False, "hz": None, "ok": False}
+            for key, topic, what, min_hz in BRINGUP_HEALTH_TOPICS
+        }
+        res["tf"] = [{"parent": p, "child": c, "ok": False,
+                      "detail": "no ROS graph"} for p, c in BRINGUP_TF_CHAIN]
+        res["summary"] = (
+            "No ROS 2 graph reachable -- is ROS sourced, and is "
+            f"ROS_DOMAIN_ID={int(cfg.get('ros_domain_id') or 0)} correct?"
+        )
+        return res
+
+    for key, topic, what, min_hz in BRINGUP_HEALTH_TOPICS:
+        entry = {"topic": topic, "what": what, "min_hz": min_hz,
+                 "advertised": topic in present, "hz": None, "ok": False}
+        if entry["advertised"]:
+            try:
+                out = subprocess.run(
+                    ["bash", "-lc",
+                     prefix + f"timeout {timeout} ros2 topic hz {shlex.quote(topic)} 2>&1"],
+                    capture_output=True, text=True, timeout=timeout + 3,
+                )
+                entry["hz"] = _parse_topic_hz(out.stdout)
+            except Exception:
+                entry["hz"] = None
+            entry["ok"] = entry["hz"] is not None and entry["hz"] >= min_hz
+        res["topics"][key] = entry
+
+    # TF: `ros2 run tf2_ros tf2_echo <parent> <child>` prints a transform only
+    # when the chain actually resolves.
+    for parent, child in BRINGUP_TF_CHAIN:
+        link = {"parent": parent, "child": child, "ok": False, "detail": ""}
+        try:
+            out = subprocess.run(
+                ["bash", "-lc",
+                 prefix + f"timeout {timeout} ros2 run tf2_ros tf2_echo "
+                 f"{shlex.quote(parent)} {shlex.quote(child)} 2>&1"],
+                capture_output=True, text=True, timeout=timeout + 3,
+            )
+            text = out.stdout
+            link["ok"] = "Translation:" in text
+            if not link["ok"]:
+                hit = re.search(r"(?:Exception|Failure|Invalid frame|does not exist)[^\n]*", text)
+                link["detail"] = hit.group(0)[:160] if hit else "no transform received"
+        except Exception as e:
+            link["detail"] = str(e)[:160]
+        res["tf"].append(link)
+
+    t = res["topics"]
+    odom_ok = t.get("odom", {}).get("ok") or t.get("odom_raw", {}).get("ok")
+    tf_ok = all(l["ok"] for l in res["tf"]) if res["tf"] else False
+    res["ready"] = bool(odom_ok and tf_ok)
+
+    problems = []
+    if not t.get("odom_raw", {}).get("ok"):
+        problems.append("no /odom/unfiltered (microcontroller or micro-ROS agent down)")
+    elif not t.get("odom", {}).get("ok"):
+        problems.append("no /odom (EKF not running)")
+    if not t.get("imu", {}).get("ok"):
+        problems.append("no /imu/data")
+    if not t.get("scan", {}).get("ok"):
+        problems.append("no /scan (LiDAR driver down or wrong port)")
+    for link in res["tf"]:
+        if not link["ok"]:
+            problems.append(f"TF {link['parent']}->{link['child']} missing")
+
+    # "Advertised but silent" has a second, easily-missed cause: the publisher
+    # is in a container and DDS shared-memory transport can't cross into this
+    # process, so discovery succeeds but no samples ever arrive. Worth naming --
+    # it looks identical to dead hardware otherwise.
+    silent = [e["topic"] for e in t.values() if e["advertised"] and e["hz"] is None]
+    if silent:
+        res["advertised_but_silent"] = silent
+        problems.append(
+            "advertised but no messages on " + ", ".join(silent) +
+            " -- publisher died, or it is in a container and DDS shared memory "
+            "cannot reach this process (try ROS_LOCALHOST_ONLY=0 / a shared "
+            "--ipc=host, or run the check where the publisher runs)"
+        )
+
+    if res["ready"] and not problems:
+        hz = t.get("odom", {}).get("hz") or t.get("odom_raw", {}).get("hz") or 0.0
+        res["summary"] = f"Bringup healthy -- odometry {hz:.1f} Hz, TF chain complete"
+    elif res["ready"]:
+        res["summary"] = "Odometry + TF OK, but: " + "; ".join(problems)
+    else:
+        res["summary"] = "Bringup not ready: " + ("; ".join(problems) or "no topics published")
+    return res
+
+
 
 
 
@@ -2693,6 +2871,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/gitinfo":
             self._send_json(collect_git_info())
+            return
+
+        if path == "/api/bringup/health":
+            qs = parse_qs(parsed.query)
+            try:
+                timeout = min(float(qs.get("timeout", [4.0])[0]), 15.0)
+            except ValueError:
+                timeout = 4.0
+            self._send_json(check_bringup_health(timeout=timeout))
             return
 
         if path == "/api/sensors":

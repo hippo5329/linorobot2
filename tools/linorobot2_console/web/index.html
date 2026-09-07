@@ -299,6 +299,22 @@
         </label>
       </div>
     </div>
+
+    <div class="card" id="card-bringup-health">
+      <h2>Bringup health check (is the robot really publishing?)</h2>
+      <p class="hint">A running bringup process proves nothing on its own -- the
+        microcontroller can be unplugged, the micro-ROS agent can have no session, the
+        LiDAR can be on the wrong port. This probes the ROS graph itself: the publish rate
+        on <code>/odom/unfiltered</code> (wheel odometry straight off the MCU),
+        <code>/odom</code> (EKF-fused), <code>/imu/data</code> and <code>/scan</code>, plus
+        the <code>odom &rarr; base_footprint &rarr; laser</code> TF chain that SLAM and Nav2
+        need before they will do anything useful.</p>
+      <div class="row">
+        <button id="btn-bringup-health" class="btn btn-primary">Check bringup health</button>
+        <span id="bringup-health-summary" class="hint"></span>
+      </div>
+      <div id="bringup-health-table" class="hint" style="margin-top:10px;"></div>
+    </div>
   </section>
 
   <!-- TELEOP -->

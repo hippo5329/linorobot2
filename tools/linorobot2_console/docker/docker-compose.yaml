@@ -50,7 +50,10 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/home/ros/.Xauthority
-      - ${HOME}/.config/linorobot2:/home/ros/.config/linorobot2:rw
+      # The host repo's config/ dir -- config/<robot>_config.yaml is the single
+      # source of truth, so the containers read the same file the Console
+      # writes and git-commits, not the copy baked into the image.
+      - ../../../config:/home/ros/linorobot2_ws/src/linorobot2/config:rw
       - ../../../linorobot2_navigation/maps:/home/ros/linorobot2_ws/src/linorobot2/linorobot2_navigation/maps:rw
 
   # --- console's own launchers -------------------------------------------------
@@ -60,7 +63,7 @@ services:
     command: >
       ros2 launch
       /home/ros/linorobot2_ws/src/linorobot2/tools/linorobot2_console/launch_bringup.py
-      config_file:=/home/ros/.config/linorobot2/robot_config.yaml
+      config_file:=/home/ros/linorobot2_ws/src/linorobot2/config/${ROBOT_NAME:-linorobot2}_config.yaml
       odom_topic:=${ODOM_TOPIC:-/odom}
       joy:=${LAUNCH_JOYSTICK:-false}
 
@@ -70,7 +73,7 @@ services:
     command: >
       ros2 launch
       /home/ros/linorobot2_ws/src/linorobot2/tools/linorobot2_console/launch_nav2.py
-      config_file:=/home/ros/.config/linorobot2/robot_config.yaml
+      config_file:=/home/ros/linorobot2_ws/src/linorobot2/config/${ROBOT_NAME:-linorobot2}_config.yaml
       slam:=true rviz:=${RVIZ:-false} sim:=${SIM:-false}
 
   navigate:
@@ -79,7 +82,7 @@ services:
     command: >
       ros2 launch
       /home/ros/linorobot2_ws/src/linorobot2/tools/linorobot2_console/launch_nav2.py
-      config_file:=/home/ros/.config/linorobot2/robot_config.yaml
+      config_file:=/home/ros/linorobot2_ws/src/linorobot2/config/${ROBOT_NAME:-linorobot2}_config.yaml
       slam:=false
       map:=/home/ros/linorobot2_ws/src/linorobot2/linorobot2_navigation/maps/${WORLD:-turtlebot3_world}.yaml
       rviz:=${RVIZ:-false} sim:=${SIM:-false}

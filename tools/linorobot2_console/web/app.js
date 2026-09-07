@@ -769,6 +769,7 @@ document.getElementById("btn-docker-build").addEventListener("click", () => {
     `DEPTH_SENSOR=${depth}\n` +
     `BASE_SERIAL_PORT=${serialPort}\n` +
     `ODOM_TOPIC=/odom\n` +
+    `ROBOT_NAME=${state.robot_name || "linorobot2"}\n` +
     `ROS_DOMAIN_ID=${domainId}\n` +
     `CUSTOM_ROBOT=false\n` +
     `LAUNCH_EXTRA=false\n` +
@@ -1093,6 +1094,50 @@ wireStartStop({
   title: "Bringup",
   buildCommand: async () => bringupLaunchCommand(),
 });
+
+// ---------- bringup health (topic + TF level, not just pgrep) ----------
+// `bringup_alive_external` in /api/status only says a process exists. This asks
+// the ROS graph whether odometry, the IMU, the LiDAR and the TF chain are
+// actually live -- the thing SLAM/Nav2 will silently fail on otherwise.
+const btnBringupHealth = document.getElementById("btn-bringup-health");
+if (btnBringupHealth) {
+  btnBringupHealth.addEventListener("click", async () => {
+    const summaryEl = document.getElementById("bringup-health-summary");
+    const tableEl = document.getElementById("bringup-health-table");
+    btnBringupHealth.disabled = true;
+    summaryEl.textContent = "Probing the ROS graph (up to ~30 s)…";
+    tableEl.innerHTML = "";
+    try {
+      const h = await fetch("/api/bringup/health?timeout=4").then((r) => r.json());
+      const mark = (ok) => (ok ? "🟢" : "🔴");
+      const rows = Object.values(h.topics || {}).map((t) => `
+        <tr>
+          <td>${mark(t.ok)}</td>
+          <td><code>${escapeHtml(t.topic)}</code></td>
+          <td>${escapeHtml(t.what)}</td>
+          <td>${t.hz == null ? (t.advertised ? "no messages" : "not advertised")
+                             : t.hz.toFixed(1) + " Hz"}</td>
+          <td>&ge; ${t.min_hz} Hz</td>
+        </tr>`).join("");
+      const tfRows = (h.tf || []).map((l) => `
+        <tr>
+          <td>${mark(l.ok)}</td>
+          <td colspan="2"><code>TF ${escapeHtml(l.parent)} &rarr; ${escapeHtml(l.child)}</code></td>
+          <td colspan="2">${escapeHtml(l.ok ? "transform resolves" : l.detail)}</td>
+        </tr>`).join("");
+      tableEl.innerHTML =
+        `<table class="health-table"><tbody>${rows}${tfRows}</tbody></table>`;
+      summaryEl.innerHTML =
+        `<span style="color: var(--${h.ready ? "accent-ok" : "accent-danger"});">` +
+        `${h.ready ? "✓" : "✗"} ${escapeHtml(h.summary)}</span>`;
+      logLine(`[console] bringup health: ${h.summary}`);
+    } catch (e) {
+      summaryEl.textContent = `health check failed: ${e}`;
+    } finally {
+      btnBringupHealth.disabled = false;
+    }
+  });
+}
 
 // ---------- teleop ----------
 wireStartStop({

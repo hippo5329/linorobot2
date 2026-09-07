@@ -297,6 +297,11 @@ class TestLinorobot2Console(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         with open(os.path.join(root, "linorobot2_navigation", "config", "navigation_jazzy.yaml")) as fh:
             self.assertNotIn("scan pointcloud", fh.read())
+        # containers read the repo-based per-robot config, not the legacy
+        # ~/.config path baked into the image
+        self.assertIn("config/${ROBOT_NAME:-linorobot2}_config.yaml", compose)
+        self.assertIn("../../../config:/home/ros/linorobot2_ws/src/linorobot2/config:rw", compose)
+        self.assertNotIn(".config/linorobot2/robot_config.yaml", compose)
 
     def test_depth_costmap_gate_is_console_only(self):
         """The depth->costmap gate lives in the console's launch_nav2.py; upstream navigation.launch.py is untouched."""
@@ -924,6 +929,55 @@ class TestLinorobot2Console(unittest.TestCase):
         parsed = server.parse_unified_yaml(text)
         self.assertEqual(parsed["console"].get("ros_distro"), "rolling")
         self.assertEqual(parsed["linorobot2"].get("base"), "2wd")
+
+    # ------------------------------------------------------------------
+    # Bringup health: topic- + TF-level readiness, not just pgrep
+    # ------------------------------------------------------------------
+    def test_parse_topic_hz(self):
+        # `ros2 topic hz` prints a running average; the LAST one has seen the
+        # most samples, so that is the one we report.
+        out = (
+            "average rate: 48.921\n"
+            "\tmin: 0.019s max: 0.022s std dev: 0.00051s window: 50\n"
+            "average rate: 50.004\n"
+            "\tmin: 0.019s max: 0.021s std dev: 0.00043s window: 100\n"
+        )
+        self.assertAlmostEqual(server._parse_topic_hz(out), 50.004)
+        # a topic with a publisher but no messages prints no average at all
+        self.assertIsNone(server._parse_topic_hz(
+            "WARNING: topic [/scan] does not appear to be published yet\n"))
+        self.assertIsNone(server._parse_topic_hz(""))
+
+    def test_bringup_health_topic_and_tf_expectations(self):
+        keys = [k for k, _t, _w, _h in server.BRINGUP_HEALTH_TOPICS]
+        self.assertEqual(keys, ["odom_raw", "odom", "imu", "scan"])
+        topics = {t for _k, t, _w, _h in server.BRINGUP_HEALTH_TOPICS}
+        # /odom/unfiltered comes straight off the microcontroller, /odom from EKF
+        self.assertIn("/odom/unfiltered", topics)
+        self.assertIn("/odom", topics)
+        self.assertIn("/scan", topics)
+        # the TF chain SLAM/Nav2 need before they do anything useful
+        self.assertEqual(server.BRINGUP_TF_CHAIN,
+                         [("odom", "base_footprint"), ("base_footprint", "laser")])
+
+    def test_bringup_health_shape_and_no_graph(self):
+        h = server.check_bringup_health(timeout=1.0)
+        for key in ("status", "ready", "ros_available", "topics", "tf", "summary"):
+            self.assertIn(key, h)
+        self.assertEqual(set(h["topics"]), {"odom_raw", "odom", "imu", "scan"})
+        self.assertEqual(len(h["tf"]), len(server.BRINGUP_TF_CHAIN))
+        self.assertTrue(h["summary"])
+        for entry in h["topics"].values():
+            for key in ("topic", "what", "min_hz", "advertised", "hz", "ok"):
+                self.assertIn(key, entry)
+        # With no ROS graph reachable nothing may be reported as ready, and the
+        # summary must name the two things that actually cause it.
+        if not h["ros_available"]:
+            self.assertEqual(h["status"], "no_graph")
+            self.assertFalse(h["ready"])
+            self.assertIn("ROS_DOMAIN_ID", h["summary"])
+            self.assertFalse(any(t["ok"] for t in h["topics"].values()))
+            self.assertFalse(any(l["ok"] for l in h["tf"]))
 
     def test_splice_yaml_section_replaces_and_inserts(self):
         base = 'linorobot2:\n  base: "2wd"\n'
