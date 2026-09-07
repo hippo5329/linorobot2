@@ -750,5 +750,27 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertIn("1355755", parsed["pids"])
         self.assertTrue(parsed["is_microros"])
 
+    def test_workflow_config_defaults(self):
+        cfg = server.load_config()
+        self.assertEqual(cfg.get("install_mode"), "native")
+        self.assertEqual(cfg.get("agent_engine"), "docker")
+
+    def test_container_status_api(self):
+        status = server.check_container_status()
+        self.assertEqual(status["status"], "ok")
+        self.assertIn("has_docker", status)
+        self.assertIn("has_podman", status)
+        self.assertIn("is_rootless_docker", status)
+        self.assertIn("platform_system", status)
+
+    def test_rootless_info_api(self):
+        info = server.get_rootless_info()
+        self.assertEqual(info["status"], "ok")
+        self.assertIn("commands", info)
+        self.assertIn("ubuntu_debian", info["commands"])
+        self.assertIn("podman_alternative", info["commands"])
+        self.assertIn("user", info)
+        self.assertIn("uid", info)
+
 if __name__ == "__main__":
     unittest.main()

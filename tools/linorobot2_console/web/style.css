@@ -246,3 +246,73 @@ body {
   display: flex; align-items: center; gap: 8px; padding: 10px 14px;
   border-bottom: 1px solid var(--border-soft, #2a3446); font-weight: 600; color: #e2e8f0;
 }
+
+/* Header Workflow Settings Stack */
+.workflow-settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 440px;
+}
+.hdr-wf-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.hdr-wf-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg-card, #1e293b);
+  padding: 0.28rem 0.65rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  position: relative;
+}
+.hdr-wf-field label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.hdr-select {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #38bdf8;
+  font-size: 0.8rem;
+  font-family: var(--font-main);
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  min-width: 110px;
+}
+.hdr-select option {
+  background: #0f172a;
+  color: #f8fafc;
+}
+.hdr-info-btn {
+  flex-shrink: 0;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.hdr-info-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+  color: #fff;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+}
+.header-status-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}

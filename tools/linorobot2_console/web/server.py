@@ -12,7 +12,9 @@ Usage: python3 server.py [port]
 import json
 import math
 import os
+import platform
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -644,6 +646,8 @@ else:  # pragma: no cover - only when patcher.py is unavailable
 DEFAULT_CONFIG = {
     "workspace_path": os.path.expanduser("~/linorobot2_ws"),
     "ros_distro": "jazzy",
+    "install_mode": "native",       # "native" | "docker" | "podman"
+    "agent_engine": "docker",       # "docker" | "podman_systemd" | "podman" | "native"
     "auto_bringup": True,
     "agent_transport": "serial",   # "serial" | "udp4"
     "agent_device": "/dev/ttyACM0",
@@ -1581,6 +1585,72 @@ def release_agent_port(port="/dev/ttyUSB0", mode="serial", udp_port=8888, host=N
     return res
 
 
+def check_container_status():
+    has_docker = shutil.which("docker") is not None
+    has_podman = shutil.which("podman") is not None
+    is_rootless_docker = False
+
+    if has_docker:
+        try:
+            info_res = subprocess.run(
+                ["docker", "info", "-f", "{{.SecurityOptions}}"],
+                capture_output=True, text=True, timeout=3
+            )
+            if "rootless" in (info_res.stdout or "").lower():
+                is_rootless_docker = True
+            elif "docker.sock" in os.environ.get("DOCKER_HOST", "") and "run/user" in os.environ.get("DOCKER_HOST", ""):
+                is_rootless_docker = True
+            else:
+                res_u = subprocess.run(
+                    ["systemctl", "--user", "is-active", "docker"],
+                    capture_output=True, text=True, timeout=2
+                )
+                if res_u.stdout.strip() == "active":
+                    is_rootless_docker = True
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "has_docker": has_docker,
+        "is_rootless_docker": is_rootless_docker,
+        "has_podman": has_podman,
+        "platform_system": platform.system(),
+    }
+
+
+def get_rootless_info():
+    c_status = check_container_status()
+    uid = os.getuid() if hasattr(os, "getuid") else 1000
+    user = os.environ.get("USER", "user")
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+
+    return {
+        "status": "ok",
+        "is_rootless": c_status["is_rootless_docker"],
+        "has_docker": c_status["has_docker"],
+        "has_podman": c_status["has_podman"],
+        "platform_system": c_status["platform_system"],
+        "user": user,
+        "uid": uid,
+        "xdg_runtime_dir": xdg_runtime,
+        "commands": {
+            "ubuntu_debian": [
+                "sudo apt-get update && sudo apt-get install -y uidmap dbus-user-session slirp4netns",
+                "dockerd-rootless-setuptool.sh install",
+                "systemctl --user enable --now docker.service",
+                f"loginctl enable-linger {user}",
+                f'export DOCKER_HOST="unix://{xdg_runtime}/docker.sock"',
+                f'grep -q "DOCKER_HOST" ~/.bashrc || echo \'export DOCKER_HOST="unix://{xdg_runtime}/docker.sock"\' >> ~/.bashrc'
+            ],
+            "podman_alternative": [
+                "sudo apt-get install -y podman  # or: sudo dnf install -y podman",
+                "podman run --rm hello-world"
+            ]
+        }
+    }
+
+
 def generate_custom_robot_specs(description):
     d = description.lower()
     
@@ -1838,6 +1908,14 @@ class Handler(BaseHTTPRequestHandler):
             user = qs.get("user", ["ubuntu"])[0]
             res = check_agent_port_status(port, mode, udp_port, host=host if host else None, user=user)
             self._send_json(res)
+            return
+
+        if path == "/api/docker/status":
+            self._send_json(check_container_status())
+            return
+
+        if path == "/api/docker/rootless_info":
+            self._send_json(get_rootless_info())
             return
 
         if path == "/api/status":

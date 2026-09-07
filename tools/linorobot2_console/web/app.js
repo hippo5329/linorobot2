@@ -228,6 +228,27 @@ async function refreshStatus() {
       setIfEmpty("cfg-agent-device", c.agent_device);
       setIfEmpty("cfg-agent-port", c.agent_port);
       setIfEmpty("cfg-agent-baud", c.agent_baud);
+
+      if (c.install_mode) {
+        const hdrM = document.getElementById("hdr-install-mode");
+        const tabM = document.getElementById("install-mode");
+        if (hdrM && !localStorage.getItem("linorobot2_install_mode")) hdrM.value = c.install_mode;
+        if (tabM && !localStorage.getItem("linorobot2_install_mode")) {
+          tabM.value = c.install_mode;
+          const isNative = c.install_mode === "native";
+          const natCards = document.getElementById("install-native-cards");
+          const dkrCard = document.getElementById("install-docker-card");
+          if (natCards) natCards.style.display = isNative ? "block" : "none";
+          if (dkrCard) dkrCard.style.display = isNative ? "none" : "block";
+        }
+      }
+
+      if (c.agent_engine) {
+        const hdrA = document.getElementById("hdr-agent-engine");
+        const cfgA = document.getElementById("cfg-agent-engine");
+        if (hdrA && !localStorage.getItem("linorobot2_agent_engine")) hdrA.value = c.agent_engine;
+        if (cfgA && !localStorage.getItem("linorobot2_agent_engine")) cfgA.value = c.agent_engine;
+      }
     }
   } catch (e) {
     // server not reachable yet / transient -- ignore, next poll will retry
@@ -603,15 +624,23 @@ document.getElementById("btn-docker-down").addEventListener("click", () => {
 });
 
 // ---------- micro-ROS agent: find-or-build, then launch ----------
+function getAgentEngine() {
+  const hdr = document.getElementById("hdr-agent-engine");
+  if (hdr && hdr.value) return hdr.value;
+  const cfg = document.getElementById("cfg-agent-engine");
+  if (cfg && cfg.value) return cfg.value;
+  return (state.config && state.config.agent_engine) || "docker";
+}
+
 function findOrBuildAgentCommand() {
-  const isDocker = document.getElementById("cfg-agent-use-docker") ? document.getElementById("cfg-agent-use-docker").checked : (installModeSel?.value !== "native");
-  if (isDocker) {
-    const engine = (installModeSel?.value === "podman") ? "podman" : "docker";
-    return `echo ">>> micro-ROS agent: using ${engine} container image (skipping build from source)"; ` +
-      `if ! command -v ${engine} >/dev/null 2>&1; then echo "ERROR: ${engine} is not installed" >&2; exit 1; fi; ` +
+  const engine = getAgentEngine();
+  if (engine === "docker" || engine === "podman" || engine === "podman_systemd") {
+    const bin = (engine === "docker") ? "docker" : "podman";
+    return `echo ">>> micro-ROS agent: using ${bin} container image (skipping build from source)"; ` +
+      `if ! command -v ${bin} >/dev/null 2>&1; then echo "ERROR: ${bin} is not installed" >&2; exit 1; fi; ` +
       `IMG="microros/micro-ros-agent:${state.status?.ros_distro || "jazzy"}"; ` +
       `echo ">>> Pulling $IMG..."; ` +
-      `${engine} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${engine} pull "$IMG" 2>/dev/null || true; }; ` +
+      `${bin} pull "$IMG" 2>/dev/null || { echo ">>> no '$IMG' tag on Docker Hub, trying ':rolling'"; IMG="microros/micro-ros-agent:rolling"; ${bin} pull "$IMG" 2>/dev/null || true; }; ` +
       `echo AGENT_DOCKER_READY`;
   }
   return envPrefix() + [
@@ -637,17 +666,42 @@ function agentLaunchCommand() {
   const device = document.getElementById("cfg-agent-device").value || c.agent_device || "/dev/ttyACM0";
   const port = document.getElementById("cfg-agent-port").value || c.agent_port || "8888";
   const baud = document.getElementById("cfg-agent-baud").value || c.agent_baud || "921600";
-  const isDocker = document.getElementById("cfg-agent-use-docker") ? document.getElementById("cfg-agent-use-docker").checked : (installModeSel?.value !== "native");
+  const engine = getAgentEngine();
+  const distro = state.status?.ros_distro || "jazzy";
 
   const preClean = transport === "udp4" ? "" : `fuser -k -TERM ${device} 2>/dev/null || true; sleep 0.5; `;
-  if (isDocker) {
-    const engine = (installModeSel?.value === "podman") ? "podman" : "docker";
-    const devFlags = transport === "udp4" ? "" : `--device ${device}`;
-    const agentArgs = transport === "udp4"
-      ? `udp4 --port ${port}`
-      : `serial --dev ${device} -b ${baud}`;
-    return `${preClean}${engine} run --rm --net=host --privileged -v /dev:/dev ${devFlags} -e ROS_DOMAIN_ID=0 microros/micro-ros-agent:${state.status?.ros_distro || "jazzy"} ${agentArgs}`;
+  const devFlags = transport === "udp4" ? "" : `--device ${device}`;
+  const agentArgs = transport === "udp4"
+    ? `udp4 --port ${port}`
+    : `serial --dev ${device} -b ${baud}`;
+
+  if (engine === "podman_systemd") {
+    const mode = transport === "udp4" ? "udp4" : "serial";
+    return preClean + [
+      `IMG="microros/micro-ros-agent:${distro}"`,
+      `echo ">>> micro-ROS agent: Podman + systemd user service (${distro})"`,
+      `podman pull "$IMG" 2>/dev/null || IMG="microros/micro-ros-agent:rolling"`,
+      `podman run -d --replace --name "microros_agent_${mode}" --net=host ${devFlags} "$IMG" ${agentArgs}`,
+      `mkdir -p "$HOME/.config/systemd/user"`,
+      `podman generate systemd --new --name "microros_agent_${mode}" > "$HOME/.config/systemd/user/microros-agent.service" 2>/dev/null || true`,
+      `systemctl --user daemon-reload 2>/dev/null || true`,
+      `systemctl --user enable --now microros-agent.service 2>/dev/null || true`,
+      `loginctl enable-linger "$USER" 2>/dev/null || true`,
+      `echo ">>> micro-ROS agent running as persistent systemd user service: microros-agent.service"`
+    ].join(" && ");
   }
+
+  if (engine === "podman") {
+    const mode = transport === "udp4" ? "udp4" : "serial";
+    return `${preClean}podman run --rm --replace -it --name "uros_agent_${mode}" --net=host --privileged -v /dev:/dev ${devFlags} -e ROS_DOMAIN_ID=0 microros/micro-ros-agent:${distro} ${agentArgs}`;
+  }
+
+  if (engine === "docker") {
+    const mode = transport === "udp4" ? "udp4" : "serial";
+    return `${preClean}docker run --rm --net=host --privileged -v /dev:/dev ${devFlags} -e ROS_DOMAIN_ID=0 microros/micro-ros-agent:${distro} ${agentArgs}`;
+  }
+
+  // native
   const runLine = transport === "udp4"
     ? `ros2 run micro_ros_agent micro_ros_agent udp4 -p ${port}`
     : `ros2 run micro_ros_agent micro_ros_agent serial --dev ${device} -b ${baud}`;
@@ -2105,3 +2159,165 @@ document.getElementById("btn-ignore-port-conflict")?.addEventListener("click", (
   document.getElementById("port-modal-overlay")?.classList.remove("open");
 });
 document.getElementById("btn-release-port-conflict")?.addEventListener("click", () => releaseAgentPort());
+
+// =============================================================================
+// WORKFLOW SETUP & ROOTLESS CONTAINER CONTROLLER
+// =============================================================================
+async function openRootlessModal() {
+  const modal = document.getElementById("modal-rootless-docker");
+  if (!modal) return;
+  modal.style.display = "flex";
+  const statusText = document.getElementById("rootless-status-text");
+  if (statusText) statusText.textContent = "Status: Checking local container engine...";
+  try {
+    const res = await fetch("/api/docker/rootless_info");
+    const info = await res.json();
+    if (statusText) {
+      if (info.is_rootless) {
+        statusText.textContent = `✅ Rootless Docker is active for user '${info.user}' (UID ${info.uid})`;
+      } else if (info.has_docker) {
+        statusText.textContent = `⚠️ Docker is running in standard (rootful) mode. Run setup below to enable rootless daemon.`;
+      } else if (info.has_podman) {
+        statusText.textContent = `✅ Podman is available (Rootless by default, no daemon needed).`;
+      } else {
+        statusText.textContent = `ℹ️ Neither Docker nor Podman found. Follow setup below to install.`;
+      }
+    }
+  } catch (e) {
+    if (statusText) statusText.textContent = "ℹ️ Container status check complete.";
+  }
+}
+
+function closeRootlessModal() {
+  const modal = document.getElementById("modal-rootless-docker");
+  if (modal) modal.style.display = "none";
+}
+
+function initWorkflowSetup() {
+  const hdrDistro = document.getElementById("hdr-distro-select");
+  const cfgDistro = document.getElementById("cfg-ros-distro");
+  const hdrMode = document.getElementById("hdr-install-mode");
+  const tabMode = document.getElementById("install-mode");
+  const hdrAgent = document.getElementById("hdr-agent-engine");
+  const cfgAgent = document.getElementById("cfg-agent-engine");
+  const btnRootlessHdr = document.getElementById("btn-rootless-guide");
+  const btnRootlessSettings = document.getElementById("btn-settings-rootless-guide");
+  const btnCloseModal = document.getElementById("btn-close-rootless-modal");
+  const btnCloseModalFoot = document.getElementById("btn-close-rootless-modal-foot");
+  const btnTestDaemon = document.getElementById("btn-test-rootless-daemon");
+  const btnCopyUbuntu = document.getElementById("btn-copy-rootless-ubuntu");
+  const btnCopyPodman = document.getElementById("btn-copy-rootless-podman");
+
+  // Restore saved choices from localStorage if available
+  const savedMode = localStorage.getItem("linorobot2_install_mode");
+  if (savedMode) {
+    if (hdrMode) hdrMode.value = savedMode;
+    if (tabMode) {
+      tabMode.value = savedMode;
+      const isNative = savedMode === "native";
+      const natCards = document.getElementById("install-native-cards");
+      const dkrCard = document.getElementById("install-docker-card");
+      if (natCards) natCards.style.display = isNative ? "block" : "none";
+      if (dkrCard) dkrCard.style.display = isNative ? "none" : "block";
+    }
+  }
+
+  const savedAgent = localStorage.getItem("linorobot2_agent_engine");
+  if (savedAgent) {
+    if (hdrAgent) hdrAgent.value = savedAgent;
+    if (cfgAgent) cfgAgent.value = savedAgent;
+  }
+
+  // 1. Distro Sync
+  if (hdrDistro) {
+    hdrDistro.addEventListener("change", () => {
+      const val = hdrDistro.value;
+      if (cfgDistro) cfgDistro.value = val;
+      localStorage.setItem("linorobot2_ros_distro", val);
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ros_distro: val }),
+      }).then(refreshStatus);
+    });
+  }
+
+  // 2. Install / Execution Mode Sync
+  const onModeChange = (mode) => {
+    if (hdrMode) hdrMode.value = mode;
+    if (tabMode) tabMode.value = mode;
+    const isNative = mode === "native";
+    const natCards = document.getElementById("install-native-cards");
+    const dkrCard = document.getElementById("install-docker-card");
+    if (natCards) natCards.style.display = isNative ? "block" : "none";
+    if (dkrCard) dkrCard.style.display = isNative ? "none" : "block";
+    localStorage.setItem("linorobot2_install_mode", mode);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ install_mode: mode }),
+    }).then(refreshStatus);
+  };
+
+  if (hdrMode) {
+    hdrMode.addEventListener("change", () => onModeChange(hdrMode.value));
+  }
+  if (tabMode) {
+    tabMode.addEventListener("change", () => onModeChange(tabMode.value));
+  }
+
+  // 3. micro-ROS Agent Engine Sync
+  const onAgentEngineChange = (engine) => {
+    if (hdrAgent) hdrAgent.value = engine;
+    if (cfgAgent) cfgAgent.value = engine;
+    const chk = document.getElementById("cfg-agent-use-docker");
+    if (chk) chk.checked = (engine !== "native");
+    localStorage.setItem("linorobot2_agent_engine", engine);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_engine: engine }),
+    }).then(refreshStatus);
+  };
+
+  if (hdrAgent) {
+    hdrAgent.addEventListener("change", () => onAgentEngineChange(hdrAgent.value));
+  }
+  if (cfgAgent) {
+    cfgAgent.addEventListener("change", () => onAgentEngineChange(cfgAgent.value));
+  }
+
+  // 4. Modal listeners
+  if (btnRootlessHdr) btnRootlessHdr.addEventListener("click", openRootlessModal);
+  if (btnRootlessSettings) btnRootlessSettings.addEventListener("click", openRootlessModal);
+  if (btnCloseModal) btnCloseModal.addEventListener("click", closeRootlessModal);
+  if (btnCloseModalFoot) btnCloseModalFoot.addEventListener("click", closeRootlessModal);
+  if (btnTestDaemon) btnTestDaemon.addEventListener("click", openRootlessModal);
+
+  // Copy buttons
+  if (btnCopyUbuntu) {
+    btnCopyUbuntu.addEventListener("click", () => {
+      const code = document.getElementById("code-rootless-ubuntu")?.textContent || "";
+      navigator.clipboard.writeText(code).then(() => {
+        btnCopyUbuntu.textContent = "✅ Copied!";
+        setTimeout(() => { btnCopyUbuntu.textContent = "📋 Copy Script"; }, 2000);
+      });
+    });
+  }
+  if (btnCopyPodman) {
+    btnCopyPodman.addEventListener("click", () => {
+      const code = document.getElementById("code-rootless-podman")?.textContent || "";
+      navigator.clipboard.writeText(code).then(() => {
+        btnCopyPodman.textContent = "✅ Copied!";
+        setTimeout(() => { btnCopyPodman.textContent = "📋 Copy"; }, 2000);
+      });
+    });
+  }
+}
+
+// Call initWorkflowSetup on DOM ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initWorkflowSetup);
+} else {
+  initWorkflowSetup();
+}

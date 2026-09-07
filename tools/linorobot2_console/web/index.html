@@ -18,15 +18,49 @@
     </svg>
     <span class="brand-title">Linorobot2 Console<span class="badge-accent">v1</span></span>
   </div>
-  <div class="header-actions">
-    <span class="hdr-field" id="hdr-distro">ROS: <select id="hdr-distro-select" class="distro-select" title="Switch ROS 2 Distribution">
-      <option value="jazzy">jazzy</option>
-      <option value="lyrical">lyrical</option>
-      <option value="rolling">rolling</option>
-    </select></span>
+  <!-- Header Workflow Settings: Mode, Engine, Agent & ROS 2 Distro -->
+  <div class="workflow-settings-stack">
+    <div class="hdr-wf-row">
+      <div class="hdr-field hdr-wf-field" title="Target ROS 2 Distribution (Jazzy, Lyrical, Rolling, Humble)">
+        <label for="hdr-distro-select">🌐 ROS 2:</label>
+        <select id="hdr-distro-select" class="hdr-select distro-select" title="Switch ROS 2 Distribution">
+          <option value="jazzy" selected>Jazzy (Noble 24.04)</option>
+          <option value="lyrical">Lyrical (Resolute 26.04)</option>
+          <option value="rolling">Rolling (Nightly)</option>
+          <option value="humble">Humble (Container)</option>
+        </select>
+      </div>
+      <div class="hdr-field hdr-wf-field" title="Linorobot2 Install & Execution Mode (Native, Docker, Podman)">
+        <label for="hdr-install-mode">🚀 Mode:</label>
+        <select id="hdr-install-mode" class="hdr-select">
+          <option value="native">Native (Direct Host)</option>
+          <option value="docker" selected>Docker (Rootless)</option>
+          <option value="podman">Podman (Rootless)</option>
+        </select>
+        <button type="button" id="btn-rootless-guide" class="hdr-info-btn" title="Setup Rootless Docker Daemon on Linux to prevent root-owned files">❓ Guide</button>
+      </div>
+    </div>
+    <div class="hdr-wf-row">
+      <div class="hdr-field hdr-wf-field" title="micro-ROS Agent Runtime Engine">
+        <label for="hdr-agent-engine">🤖 Agent:</label>
+        <select id="hdr-agent-engine" class="hdr-select">
+          <option value="docker" selected>Docker (Rootless)</option>
+          <option value="podman_systemd">Podman + systemd</option>
+          <option value="podman">Podman (Container)</option>
+          <option value="native">Native (ROS 2 / ~/uros_ws)</option>
+        </select>
+      </div>
+      <div class="hdr-field hdr-wf-field" title="micro-ROS Agent Status & Port Conflict Check">
+        <label>⚡ Agent:</label>
+        <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span>
+        <button type="button" class="btn-mini" id="hdr-btn-agent-check" title="Check Agent Port Availability" style="margin-left:4px;">🔍</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="header-status-group">
     <span class="hdr-field" id="hdr-workspace">Workspace: <b>--</b></span>
     <span class="hdr-field" id="hdr-bringup">Bringup: <span class="pill pill-unknown" id="hdr-bringup-pill">down</span></span>
-    <span class="hdr-field" id="hdr-agent">Agent: <span class="pill pill-unknown" id="hdr-agent-pill">unknown</span> <button type="button" class="btn-mini" id="hdr-btn-agent-check" title="Check Agent Port Availability" style="margin-left:4px;">🔍</button></span>
   </div>
 </header>
 
@@ -655,12 +689,18 @@
     </div>
     <div class="card">
       <h2>Micro-ROS agent</h2>
-      <div class="row">
-        <label class="checkbox-label">
-          <input type="checkbox" id="cfg-agent-use-docker" checked>
-          <span>Use Docker for micro-ROS agent (pulls official container image, skips source build)</span>
+      <div class="row" style="align-items: flex-end; gap: 10px;">
+        <label style="flex: 1;">Agent Engine
+          <select id="cfg-agent-engine">
+            <option value="docker" selected>Docker (Rootless container image, skips source build)</option>
+            <option value="podman_systemd">Podman + systemd (Persistent user service)</option>
+            <option value="podman">Podman (Rootless container, no daemon)</option>
+            <option value="native">Native (ros2 run / ~/uros_ws build)</option>
+          </select>
         </label>
+        <button type="button" class="btn" id="btn-settings-rootless-guide">❓ Rootless Guide</button>
       </div>
+      <input type="checkbox" id="cfg-agent-use-docker" checked style="display:none;">
       <div class="row">
         <label>Transport
           <select id="cfg-agent-transport">
@@ -744,6 +784,73 @@
       <div class="row" style="gap:10px; justify-content:flex-end;">
         <button type="button" class="btn" id="btn-ignore-port-conflict">Ignore</button>
         <button type="button" class="btn btn-danger" id="btn-release-port-conflict">⚡ Release Port &amp; Stop Agent</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Rootless Docker Daemon & Podman Setup Guide Modal -->
+<div id="modal-rootless-docker" class="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(8px);">
+  <div class="modal-card" style="background:var(--bg-card, #111827);border:1px solid #38bdf8;border-radius:14px;padding:26px 30px;min-width:420px;max-width:680px;width:90%;box-shadow:0 25px 65px rgba(0,0,0,0.7);max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="font-size:1.6rem;">🐳</span>
+        <div>
+          <h3 style="margin:0;font-size:1.15rem;color:#f8fafc;">Linux Rootless Container Guide</h3>
+          <p style="margin:2px 0 0 0;font-size:0.8rem;color:#94a3b8;">Prevent root file ownership on bind-mounted directories</p>
+        </div>
+      </div>
+      <button type="button" id="btn-close-rootless-modal" class="btn btn-sm" style="font-size:1.1rem;padding:2px 8px;">✕</button>
+    </div>
+
+    <div style="background:rgba(56, 189, 248, 0.1);border:1px solid rgba(56, 189, 248, 0.3);border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:0.84rem;color:#38bdf8;margin-bottom:4px;">💡 Why Rootless Docker on Linux?</div>
+      <p style="margin:0;font-size:0.8rem;color:#cbd5e1;line-height:1.45;">
+        When standard (rootful) Docker executes container builds with volume mounts (<code>-v "$(pwd):/workspace"</code>), all generated files (such as <code>.env</code>, <code>devices.generated.yaml</code>, and build artifacts) are written as <strong>root:root</strong>. This causes local Git commit errors and permission denies during local development.
+        <strong>Rootless Docker</strong> and <strong>Podman</strong> run completely inside your user namespace, guaranteeing all files stay owned by your normal user account.
+      </p>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:0.82rem;font-weight:600;color:#e2e8f0;">⚡ 1-Click Setup: Ubuntu / Debian / Raspberry Pi OS</span>
+        <button type="button" id="btn-copy-rootless-ubuntu" class="btn btn-sm" style="font-size:0.75rem;">📋 Copy Script</button>
+      </div>
+      <pre style="background:rgba(15,23,42,0.9);border:1px solid rgba(255,255,255,0.1);padding:10px 12px;border-radius:6px;font-family:var(--font-mono, monospace);font-size:0.75rem;color:#38bdf8;overflow-x:auto;margin:0;"><code id="code-rootless-ubuntu"># 1. Install prerequisites
+sudo apt-get update && sudo apt-get install -y uidmap dbus-user-session slirp4netns
+# 2. Run official rootless installer (non-root)
+dockerd-rootless-setuptool.sh install
+# 3. Enable user systemd service and persistent lingering
+systemctl --user enable --now docker.service
+loginctl enable-linger $USER
+# 4. Point DOCKER_HOST to your user socket
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+grep -q "DOCKER_HOST" ~/.bashrc || echo 'export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"' >> ~/.bashrc</code></pre>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-size:0.82rem;font-weight:600;color:#e2e8f0;">🦭 Alternative: Podman (Rootless by Default — No Daemon!)</span>
+        <button type="button" id="btn-copy-rootless-podman" class="btn btn-sm" style="font-size:0.75rem;">📋 Copy</button>
+      </div>
+      <pre style="background:rgba(15,23,42,0.9);border:1px solid rgba(255,255,255,0.1);padding:10px 12px;border-radius:6px;font-family:var(--font-mono, monospace);font-size:0.75rem;color:#a78bfa;overflow-x:auto;margin:0;"><code id="code-rootless-podman">sudo apt-get install -y podman  # Fedora: sudo dnf install -y podman
+# Podman works immediately with zero daemon configuration:
+podman run --rm hello-world</code></pre>
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <span style="font-size:0.82rem;font-weight:600;color:#e2e8f0;display:block;margin-bottom:6px;">🖥️ Windows &amp; macOS Note</span>
+      <p style="margin:0;font-size:0.78rem;color:#94a3b8;line-height:1.4;">
+        On Windows (WSL2 / Docker Desktop) and macOS (Docker Desktop / Colima), volume mount permissions are already automatically mapped to the host user by the hypervisor layer. No rootless daemon configuration is required.
+      </p>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:space-between;align-items:center;border-top:1px solid rgba(255,255,255,0.1);padding-top:14px;">
+      <div id="rootless-status-text" style="font-size:0.78rem;color:#38bdf8;">Status: Ready to test container engine.</div>
+      <div style="display:flex;gap:8px;">
+        <button type="button" id="btn-test-rootless-daemon" class="btn btn-sm">🔍 Test Daemon</button>
+        <button type="button" id="btn-close-rootless-modal-foot" class="btn btn-sm btn-primary">Done</button>
       </div>
     </div>
   </div>
