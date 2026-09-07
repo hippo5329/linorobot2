@@ -802,5 +802,23 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertEqual(dis_res["status"], "ok")
         self.assertFalse(dis_res["enabled"])
 
+    def test_setup_rootless_docker(self):
+        res = server.setup_rootless_docker()
+        self.assertIn("status", res)
+        self.assertIn("success", res)
+        self.assertIn("is_rootless", res)
+        self.assertIn("message", res)
+
+    def test_install_container_engine(self):
+        res_p = server.install_container_engine("podman")
+        self.assertIn("status", res_p)
+        self.assertIn("installed", res_p)
+        self.assertEqual(res_p["engine"], "podman")
+
+        res_d = server.install_container_engine("docker")
+        self.assertIn("status", res_d)
+        self.assertIn("installed", res_d)
+        self.assertEqual(res_d["engine"], "docker")
+
 if __name__ == "__main__":
     unittest.main()

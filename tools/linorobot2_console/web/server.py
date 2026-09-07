@@ -1619,6 +1619,195 @@ def check_container_status():
     }
 
 
+
+
+
+
+def install_container_engine(engine="docker"):
+    logs = []
+    engine = engine.lower().strip()
+
+    if platform.system() != "Linux":
+        return {
+            "status": "ok",
+            "installed": True,
+            "engine": engine,
+            "message": "On Windows/macOS, please install Docker Desktop or Podman Desktop.",
+            "logs": "Non-Linux platform."
+        }
+
+    has_apt = shutil.which("apt-get") is not None
+    has_dnf = shutil.which("dnf") is not None
+
+    if engine in ("podman", "podman_systemd"):
+        if shutil.which("podman"):
+            return {
+                "status": "ok",
+                "installed": True,
+                "engine": "podman",
+                "message": "Podman is already installed.",
+                "logs": "podman binary present."
+            }
+        logs.append("Installing Podman...")
+        if has_apt:
+            subprocess.run(["sudo", "-n", "apt-get", "update"], capture_output=True, text=True, timeout=60)
+            r = subprocess.run(["sudo", "-n", "apt-get", "install", "-y", "podman", "podman-compose"], capture_output=True, text=True, timeout=180)
+            logs.append(r.stdout or r.stderr)
+        elif has_dnf:
+            r = subprocess.run(["sudo", "-n", "dnf", "install", "-y", "podman", "podman-compose"], capture_output=True, text=True, timeout=180)
+            logs.append(r.stdout or r.stderr)
+        else:
+            return {
+                "status": "error",
+                "installed": False,
+                "engine": "podman",
+                "message": "No supported package manager found (apt-get or dnf).",
+                "logs": "Unsupported package manager."
+            }
+
+        installed = shutil.which("podman") is not None
+        return {
+            "status": "ok" if installed else "error",
+            "installed": installed,
+            "engine": "podman",
+            "message": "Podman installed successfully." if installed else "Podman installation failed.",
+            "logs": "\n".join(logs)
+        }
+
+    elif engine == "docker":
+        if not shutil.which("docker"):
+            logs.append("Installing Docker packages...")
+            if has_apt:
+                subprocess.run(["sudo", "-n", "apt-get", "update"], capture_output=True, text=True, timeout=60)
+                r = subprocess.run(["sudo", "-n", "apt-get", "install", "-y", "docker.io", "uidmap", "dbus-user-session", "slirp4netns"], capture_output=True, text=True, timeout=180)
+                logs.append(r.stdout or r.stderr)
+            elif has_dnf:
+                r = subprocess.run(["sudo", "-n", "dnf", "install", "-y", "docker-ce", "shadow-utils-subid", "docker-ce-rootless-extras", "slirp4netns", "fuse-overlayfs"], capture_output=True, text=True, timeout=180)
+                logs.append(r.stdout or r.stderr)
+            else:
+                return {
+                    "status": "error",
+                    "installed": False,
+                    "engine": "docker",
+                    "message": "No supported package manager found (apt-get or dnf).",
+                    "logs": "Unsupported package manager."
+                }
+
+        rootless_res = setup_rootless_docker()
+        logs.append(rootless_res.get("logs", ""))
+
+        status = check_container_status()
+        installed = status["has_docker"]
+        return {
+            "status": "ok" if installed else "error",
+            "installed": installed,
+            "is_rootless": status["is_rootless_docker"],
+            "engine": "docker",
+            "message": "Docker (Rootless) installed and configured." if (installed and status["is_rootless_docker"]) else ("Docker installed." if installed else "Docker installation failed."),
+            "logs": "\n".join(logs)
+        }
+
+    return {
+        "status": "error",
+        "installed": False,
+        "engine": engine,
+        "message": f"Unknown container engine '{engine}'.",
+        "logs": "Invalid engine requested."
+    }
+
+
+def setup_rootless_docker():
+    logs = []
+    user = os.environ.get("USER", "ubuntu")
+    uid = os.getuid() if hasattr(os, "getuid") else 1000
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+
+    if platform.system() != "Linux":
+        return {
+            "status": "ok",
+            "success": True,
+            "message": "Rootless setup is only needed on Linux. Windows and macOS map volume permissions automatically.",
+            "is_rootless": True,
+            "logs": "Non-Linux platform."
+        }
+
+    status = check_container_status()
+    if status["is_rootless_docker"]:
+        return {
+            "status": "ok",
+            "success": True,
+            "message": f"Rootless Docker is already active for user '{user}' (UID {uid}).",
+            "is_rootless": True,
+            "logs": "Rootless daemon is already active."
+        }
+
+    setuptool = shutil.which("dockerd-rootless-setuptool.sh")
+    if not setuptool:
+        for p in ["/usr/bin/dockerd-rootless-setuptool.sh", os.path.expanduser("~/.docker/bin/dockerd-rootless-setuptool.sh")]:
+            if os.path.exists(p):
+                setuptool = p
+                break
+
+    if not setuptool:
+        logs.append("Attempting to install rootless Docker prerequisites...")
+        if shutil.which("apt-get"):
+            subprocess.run(["sudo", "-n", "apt-get", "update"], capture_output=True, text=True)
+            r_inst = subprocess.run(["sudo", "-n", "apt-get", "install", "-y", "uidmap", "dbus-user-session", "slirp4netns", "docker-ce-rootless-extras"], capture_output=True, text=True)
+            logs.append(r_inst.stdout or r_inst.stderr)
+        elif shutil.which("dnf"):
+            r_inst = subprocess.run(["sudo", "-n", "dnf", "install", "-y", "shadow-utils-subid", "docker-ce-rootless-extras", "slirp4netns", "fuse-overlayfs"], capture_output=True, text=True)
+            logs.append(r_inst.stdout or r_inst.stderr)
+        setuptool = shutil.which("dockerd-rootless-setuptool.sh")
+
+    if not setuptool:
+        return {
+            "status": "error",
+            "success": False,
+            "message": "dockerd-rootless-setuptool.sh not found. Install uidmap and docker-ce-rootless-extras.",
+            "is_rootless": False,
+            "logs": "\n".join(logs)
+        }
+
+    logs.append("Running dockerd-rootless-setuptool.sh install -f...")
+    try:
+        r_install = subprocess.run([setuptool, "install", "-f"], capture_output=True, text=True, timeout=30)
+        logs.append(r_install.stdout)
+        if r_install.stderr:
+            logs.append(r_install.stderr)
+    except Exception as e:
+        logs.append(f"Execution error: {e}")
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "docker.service"], capture_output=True, text=True)
+    subprocess.run(["loginctl", "enable-linger", user], capture_output=True, text=True)
+
+    docker_sock = f"unix://{xdg_runtime}/docker.sock"
+    os.environ["DOCKER_HOST"] = docker_sock
+
+    bashrc = os.path.expanduser("~/.bashrc")
+    try:
+        if os.path.exists(bashrc):
+            with open(bashrc, "r", encoding="utf-8") as f:
+                b_cnt = f.read()
+            if "DOCKER_HOST" not in b_cnt:
+                with open(bashrc, "a", encoding="utf-8") as f:
+                    f.write(f'\nexport DOCKER_HOST="{docker_sock}"\n')
+                logs.append("Appended DOCKER_HOST to ~/.bashrc")
+    except Exception as e:
+        logs.append(f"Notice: could not update ~/.bashrc: {e}")
+
+    new_status = check_container_status()
+    success = new_status["is_rootless_docker"]
+
+    return {
+        "status": "ok" if success else "warning",
+        "success": success,
+        "is_rootless": success,
+        "message": f"Rootless Docker {'configured and active' if success else 'setup completed with warnings'}.",
+        "logs": "\n".join(logs)
+    }
+
+
 def get_rootless_info():
     c_status = check_container_status()
     uid = os.getuid() if hasattr(os, "getuid") else 1000
@@ -2122,6 +2311,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(get_rootless_info())
             return
 
+        if path == "/api/docker/setup_rootless":
+            self._send_json(setup_rootless_docker())
+            return
+
+        if path == "/api/container/install":
+            qs = parse_qs(parsed.query)
+            eng = qs.get("engine", ["docker"])[0]
+            self._send_json(install_container_engine(eng))
+            return
+
         if path == "/api/autostart/status":
             self._send_json(get_autostart_status())
             return
@@ -2439,6 +2638,24 @@ class Handler(BaseHTTPRequestHandler):
             user = data.get("user", "ubuntu")
             res = release_agent_port(port, mode, udp_port, host=host if host else None, user=user)
             self._send_json(res)
+            return
+
+        if path == "/api/docker/status":
+            self._send_json(check_container_status())
+            return
+
+        if path == "/api/docker/rootless_info":
+            self._send_json(get_rootless_info())
+            return
+
+        if path == "/api/docker/setup_rootless":
+            self._send_json(setup_rootless_docker())
+            return
+
+        if path == "/api/container/install":
+            qs = parse_qs(parsed.query)
+            eng = qs.get("engine", ["docker"])[0]
+            self._send_json(install_container_engine(eng))
             return
 
         if path == "/api/agent/kill":

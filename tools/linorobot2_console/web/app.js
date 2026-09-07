@@ -2163,6 +2163,109 @@ document.getElementById("btn-release-port-conflict")?.addEventListener("click", 
 // =============================================================================
 // WORKFLOW SETUP & ROOTLESS CONTAINER CONTROLLER
 // =============================================================================
+
+// Automated Rootless Docker Setup Helper
+
+function showToast(message, duration = 3500) {
+  let toast = document.getElementById("toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add("show");
+  if (toast._timer) clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, duration);
+}
+
+async function ensureContainerEngine(engine) {
+  if (engine === "native") return { installed: true };
+  const targetEngine = (engine === "podman" || engine === "podman_systemd") ? "podman" : "docker";
+
+  try {
+    const status = await fetch("/api/docker/status").then(r => r.json());
+    if (targetEngine === "podman" && !status.has_podman) {
+      showToast("🦭 Podman not found on system. Installing automatically...", 5000);
+      const res = await fetch("/api/container/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine: "podman" })
+      }).then(r => r.json());
+      if (res.installed) {
+        showToast("✅ Podman installed successfully!", 4000);
+      } else {
+        showToast("⚠️ Podman auto-install failed: " + res.message, 6000);
+      }
+      return res;
+    } else if (targetEngine === "docker") {
+      if (!status.has_docker) {
+        showToast("🐳 Docker not found on system. Installing Rootless Docker automatically...", 6000);
+        const res = await fetch("/api/container/install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ engine: "docker" })
+        }).then(r => r.json());
+        if (res.installed) {
+          showToast("✅ Docker (Rootless) installed and configured!", 4000);
+        } else {
+          showToast("⚠️ Docker auto-install failed: " + res.message, 6000);
+        }
+        return res;
+      } else if (!status.is_rootless_docker && status.platform_system === "Linux") {
+        await triggerRootlessDockerSetup(false);
+      }
+    }
+  } catch (e) {
+    console.warn("Container auto-check error:", e);
+  }
+}
+
+
+async function triggerRootlessDockerSetup(isManual = false) {
+  const statusText = document.getElementById("rootless-status-text");
+  const btnSetup = document.getElementById("btn-setup-rootless-docker");
+  if (statusText) statusText.textContent = "⚡ Configuring Rootless Docker daemon...";
+  if (btnSetup) {
+    btnSetup.disabled = true;
+    btnSetup.textContent = "Setting up...";
+  }
+
+  try {
+    const res = await fetch("/api/docker/setup_rootless", { method: "POST" }).then(r => r.json());
+    if (statusText) {
+      if (res.success || res.is_rootless) {
+        statusText.textContent = `✅ ${res.message || "Rootless Docker active!"}`;
+        if (!isManual) showToast("🐳 Rootless Docker was automatically configured for this session.");
+      } else {
+        statusText.textContent = `⚠️ ${res.message || "Setup completed with warnings. Check logs."}`;
+      }
+    }
+    return res;
+  } catch (err) {
+    if (statusText) statusText.textContent = `⚠️ Setup error: ${err.message}`;
+    return { success: false, error: err.message };
+  } finally {
+    if (btnSetup) {
+      btnSetup.disabled = false;
+      btnSetup.textContent = "⚡ Setup Rootless Now";
+    }
+  }
+}
+
+async function checkAndAutoSetupRootlessDocker() {
+  try {
+    const status = await fetch("/api/docker/status").then(r => r.json());
+    if (status.platform_system === "Linux" && status.has_docker && !status.is_rootless_docker) {
+      console.log("[Linorobot2 Console] Auto-configuring rootless Docker...");
+      await triggerRootlessDockerSetup(false);
+    }
+  } catch (e) {}
+}
+
+
 async function openRootlessModal() {
   const modal = document.getElementById("modal-rootless-docker");
   if (!modal) return;
@@ -2252,6 +2355,7 @@ function initWorkflowSetup() {
     if (natCards) natCards.style.display = isNative ? "block" : "none";
     if (dkrCard) dkrCard.style.display = isNative ? "none" : "block";
     localStorage.setItem("linorobot2_install_mode", mode);
+    ensureContainerEngine(mode);
     fetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2273,6 +2377,7 @@ function initWorkflowSetup() {
     const chk = document.getElementById("cfg-agent-use-docker");
     if (chk) chk.checked = (engine !== "native");
     localStorage.setItem("linorobot2_agent_engine", engine);
+    ensureContainerEngine(engine);
     fetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2293,6 +2398,9 @@ function initWorkflowSetup() {
   if (btnCloseModal) btnCloseModal.addEventListener("click", closeRootlessModal);
   if (btnCloseModalFoot) btnCloseModalFoot.addEventListener("click", closeRootlessModal);
   if (btnTestDaemon) btnTestDaemon.addEventListener("click", openRootlessModal);
+  const btnSetupRootless = document.getElementById("btn-setup-rootless-docker");
+  if (btnSetupRootless) btnSetupRootless.addEventListener("click", () => triggerRootlessDockerSetup(true));
+  checkAndAutoSetupRootlessDocker();
 
   // Copy buttons
   if (btnCopyUbuntu) {
