@@ -1,3 +1,4 @@
+import socketserver
 import threading
 import urllib.request
 #!/usr/bin/env python3
@@ -1211,6 +1212,58 @@ class TestLinorobot2Console(unittest.TestCase):
                 self.assertIn("installed", data)
         finally:
             srv.shutdown()
+
+
+    def test_build_base_install_cmd(self):
+        cmd = server.build_base_install_cmd(ws="/tmp/test_ws", distro="jazzy")
+        self.assertIn("mkdir -p /tmp/test_ws/src", cmd)
+        self.assertIn("colcon build --symlink-install", cmd)
+        self.assertIn("rosdep", cmd)
+        self.assertIn("linorobot2", cmd)
+
+    def test_get_package_install_info(self):
+        info = server.get_package_install_info("nav2_bringup", distro="jazzy")
+        self.assertEqual(info["package"], "nav2_bringup")
+        self.assertIn("installed", info)
+        if not info["installed"]:
+            self.assertIn("apt-get install -y ros-jazzy-nav2-bringup", info["install_cmd"])
+
+    def test_workspace_build_cmd_endpoint(self):
+        port = 8997
+        httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), server.ConsoleHandler)
+        t = threading.Thread(target=httpd.serve_forever)
+        t.daemon = True
+        t.start()
+        try:
+            url = f"http://127.0.0.1:{port}/api/workspace/build_cmd?ws=/tmp/test_ws&distro=jazzy"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertIn("command", data)
+                self.assertIn("colcon build", data["command"])
+                self.assertEqual(data["workspace"], "/tmp/test_ws")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_package_check_endpoint(self):
+        port = 8996
+        httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), server.ConsoleHandler)
+        t = threading.Thread(target=httpd.serve_forever)
+        t.daemon = True
+        t.start()
+        try:
+            url = f"http://127.0.0.1:{port}/api/package/check?pkg=nav2_bringup&distro=jazzy"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                self.assertEqual(resp.status, 200)
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(data["package"], "nav2_bringup")
+                self.assertIn("installed", data)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 if __name__ == "__main__":
     unittest.main()

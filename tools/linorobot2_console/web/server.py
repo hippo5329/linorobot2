@@ -902,6 +902,31 @@ else:  # pragma: no cover - only when patcher.py is unavailable
         return {}
 
 
+
+def _find_default_workspace():
+    # Look 5 directories up from web/server.py: tools/linorobot2_console -> tools -> linorobot2 -> src -> workspace
+    cand = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
+    if os.path.isdir(os.path.join(cand, "src", "linorobot2")):
+        return cand
+    return os.path.expanduser("~/linorobot2_ws")
+
+
+def build_base_install_cmd(ws=None, distro=None):
+    """Command string to clone, resolve dependencies, and build the base linorobot2 workspace."""
+    ws = os.path.abspath(os.path.expanduser(ws or _find_default_workspace()))
+    distro = distro or detect_ros_distro()
+    steps = [
+        f"mkdir -p {ws}/src",
+        f"cd {ws}/src",
+        f"([ -d linorobot2 ] || git clone -b {distro} https://github.com/linorobot/linorobot2.git linorobot2 || git clone -b main https://github.com/linorobot/linorobot2.git linorobot2 || git clone https://github.com/linorobot/linorobot2.git linorobot2)",
+        "touch linorobot2/linorobot2_gazebo/COLCON_IGNORE 2>/dev/null || true",
+        f"cd {ws}",
+        "rosdep update 2>/dev/null || true",
+        "rosdep install --from-paths src --ignore-src -y --skip-keys microxrcedds_agent 2>/dev/null || true",
+        "colcon build --symlink-install",
+    ]
+    return " && ".join(steps)
+
 DEFAULT_CONFIG = {
     "workspace_path": os.path.expanduser("~/linorobot2_ws"),
     "ros_distro": "jazzy",
@@ -1496,6 +1521,11 @@ def load_config(robot_name=None):
             cfg.update(legacy)
     if cfg.get("workspace_path"):
         cfg["workspace_path"] = os.path.expanduser(cfg["workspace_path"])
+        # Only fallback if workspace_path is default ~/linorobot2_ws and hosting repo workspace is built
+        if cfg["workspace_path"] == os.path.expanduser("~/linorobot2_ws"):
+            def_ws = _find_default_workspace()
+            if def_ws != cfg["workspace_path"] and os.path.exists(os.path.join(def_ws, "install", "setup.bash")):
+                cfg["workspace_path"] = def_ws
     return cfg
 
 
@@ -2839,6 +2869,25 @@ def find_laser_driver_info(model_code):
     return None, None, None
 
 
+
+def get_package_install_info(pkg, distro=None, ws=None):
+    """Check if a ROS package is installed; if not, return apt install command."""
+    if not pkg:
+        return {"package": "", "installed": True, "install_cmd": None}
+    distro = distro or detect_ros_distro()
+    ws = os.path.abspath(os.path.expanduser(ws or DEFAULT_CONFIG["workspace_path"]))
+    installed, reason = check_sensor_driver_installed(pkg, ws=ws)
+    if installed:
+        return {"package": pkg, "installed": True, "install_cmd": None, "reason": reason}
+    apt_pkg = f"ros-{distro}-{pkg.replace('_', '-')}"
+    cmd = f"sudo apt-get update && sudo apt-get install -y {apt_pkg}"
+    return {
+        "package": pkg,
+        "installed": False,
+        "install_cmd": cmd,
+        "reason": reason
+    }
+
 def check_sensor_driver_installed(pkg, ws=None):
     """Check whether a ROS 2 driver package is installed in /opt/ros, workspace install, or workspace src."""
     if not pkg:
@@ -3123,6 +3172,21 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_bringup_stream()
             return
 
+        if path == "/api/package/check":
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            pkg = q.get("pkg", "")
+            distro = q.get("distro") or detect_ros_distro()
+            ws_path = q.get("ws") or _find_default_workspace()
+            self._send_json(get_package_install_info(pkg, distro=distro, ws=ws_path))
+            return
+
+        if path == "/api/workspace/build_cmd":
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            ws_path = q.get("ws") or _find_default_workspace()
+            distro = q.get("distro") or detect_ros_distro()
+            self._send_json({"command": build_base_install_cmd(ws_path, distro), "workspace": ws_path})
+            return
+
         if path == "/api/sensors/driver_status":
             q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             sensor = q.get("sensor", "")
@@ -3368,6 +3432,12 @@ class Handler(BaseHTTPRequestHandler):
             cfg.update(incoming)
             save_config(cfg)
             self._send_json(cfg)
+            return
+
+        if path == "/api/workspace/build_cmd":
+            ws_path = data.get("workspace_path") or _find_default_workspace()
+            distro = data.get("ros_distro") or detect_ros_distro()
+            self._send_json({"command": build_base_install_cmd(ws_path, distro), "workspace": ws_path})
             return
 
         if path == "/api/sensor_install_cmd":

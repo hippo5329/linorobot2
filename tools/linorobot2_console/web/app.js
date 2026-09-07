@@ -133,21 +133,28 @@ function killSlot(slot) {
 function wireStartStop({ startBtn, stopBtn, slot, title, buildCommand, needsAgent, needsBringup }) {
   startBtn.addEventListener("click", async () => {
     startBtn.disabled = true;
-    if (needsBringup) {
-      await ensureBringupRunning();
-    } else if (needsAgent) {
-      await ensureAgentRunning();
+    try {
+      if (needsBringup) {
+        await ensureBringupRunning(title);
+      } else if (needsAgent) {
+        await ensureAgentRunning();
+      }
+      const command = await buildCommand();
+      stopBtn.disabled = false;
+      runCommand(command, {
+        slot,
+        title,
+        onDone: () => {
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        },
+      });
+    } catch (err) {
+      console.error(`Failed to start ${title}:`, err);
+      logLine(`[console] ✖ Failed to start ${title}: ${err.message || err}`);
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
     }
-    const command = await buildCommand();
-    stopBtn.disabled = false;
-    runCommand(command, {
-      slot,
-      title,
-      onDone: () => {
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-      },
-    });
   });
   stopBtn.addEventListener("click", () => {
     killSlot(slot);
@@ -162,7 +169,7 @@ function getDistro() {
 function envPrefix() {
   const distro = getDistro();
   const ws = (state.config && state.config.workspace_path) || "~/linorobot2_ws";
-  return `export ROS_DISTRO=${distro}; ` +
+  return `export PATH=/usr/bin:$PATH; export ROS_DISTRO=${distro}; ` +
          `if [ -f /opt/ros/${distro}/setup.bash ]; then source /opt/ros/${distro}/setup.bash 2>/dev/null || true; ` +
          `elif [ -f /opt/ros/jazzy/setup.bash ]; then source /opt/ros/jazzy/setup.bash 2>/dev/null || true; ` +
          `elif [ -f /opt/ros/rolling/setup.bash ]; then source /opt/ros/rolling/setup.bash 2>/dev/null || true; ` +
@@ -787,23 +794,15 @@ document.getElementById("btn-import").addEventListener("click", async () => {
 
 // ---------- install actions ----------
 document.getElementById("btn-install-base").addEventListener("click", () => {
-  const workspace = document.getElementById("install-workspace").value.trim() || ws();
-  const cmd = [
-    `mkdir -p ${workspace}/src`,
-    `cd ${workspace}/src`,
-    gitCloneDistroSnippet("https://github.com/linorobot/linorobot2", "linorobot2"),
-    `touch linorobot2/linorobot2_gazebo/COLCON_IGNORE`,
-    `cd ${workspace}`,
-    `rosdep update`,
-    `rosdep install --from-paths src --ignore-src -y --skip-keys microxrcedds_agent`,
-    `colcon build --symlink-install`,
-  ].join(" && ");
-  fetch("/api/config", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspace_path: workspace }),
-  });
-  runCommand(envPrefix() + cmd, { title: "Base install" });
+  const workspace = document.getElementById("install-workspace").value.trim();
+  if (workspace) {
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_path: workspace }),
+    });
+  }
+  checkAndBuildWorkspace();
 });
 
 // Install/udev command assembly lives on the server now (build_sensor_install_cmd);
@@ -1198,6 +1197,44 @@ function isAutoBringupEnabled() {
   return el ? el.checked : true;
 }
 
+
+function isAgentAlive() {
+  return Boolean(state.status && (state.status.agent_alive_external || state.status.agent_busy_console));
+}
+
+async function ensureNav2Prerequisites(targetTitle = "Navigation") {
+  if (isDockerMode()) return true;
+  const isSlam = (targetTitle || "").toLowerCase().includes("slam");
+  const pkg = isSlam ? "slam_toolbox" : "nav2_bringup";
+  try {
+    const res = await fetch(`/api/package/check?pkg=${encodeURIComponent(pkg)}&distro=${encodeURIComponent(getDistro())}&ws=${encodeURIComponent(ws())}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (!data.installed && data.install_cmd) {
+        openTerminal(`Installing Nav2 Prerequisite: ${pkg}`);
+        logLine("[console] -------------------------------------------------------------");
+        logLine(`[console] [1-Click Nav2] Package '${pkg}' is required for ${targetTitle}.`);
+        logLine(`[console] Automatically installing '${pkg}'...`);
+        logLine("[console] -------------------------------------------------------------");
+        const ok = await new Promise((resolve) => {
+          runCommand(data.install_cmd, {
+            title: `Install ${pkg}`,
+            action: `install ${pkg}`,
+            onDone: (exitCode) => resolve(exitCode === 0),
+          });
+        });
+        if (!ok) {
+          logLine(`[console] ⚠ Auto-install of '${pkg}' exited with error. Launching anyway...`);
+        }
+        return ok;
+      }
+    }
+  } catch (err) {
+    console.warn("Nav2 package check failed:", err);
+  }
+  return true;
+}
+
 function isBringupAlive() {
   return Boolean(state.status && (state.status.bringup_alive_external || state.status.bringup_busy_console));
 }
@@ -1217,34 +1254,51 @@ function bringupLaunchCommand() {
     `ros2 launch ${launcher} config_file:=${cfgPath} base:=${base} base_serial_port:=${dev} micro_ros_baudrate:=${baud} madgwick:=${madgwick}`;
 }
 
-async function ensureBringupRunning() {
+async function ensureBringupRunning(targetTitle = "requested action") {
   if (!isAutoBringupEnabled()) return;
   await refreshStatus();
-  if (isBringupAlive()) {
-    logLine("[console] Robot Bringup is already active.");
-    return;
+
+  // 1-Click Intermediate Step 1: Ensure micro-ROS agent is active
+  if (!isAgentAlive()) {
+    logLine("[console] [1-Click] Step 1: micro-ROS Agent is down -- auto-starting agent...");
+    await ensureAgentRunning();
   }
 
-  // Pre-flight check: Warn if native workspace has not been built yet
+  // 1-Click Intermediate Step 2: Auto-build base workspace if not built yet
   if (!isDockerMode() && state.status && state.status.workspace_built === false) {
-    openTerminal("Robot Bringup: Pre-flight check");
-    logLine(`[console] ⚠ Workspace is not built yet (${ws()}/install/setup.bash missing).`);
-    logLine("[console] linorobot2_bringup and base packages will not be found until the workspace is built.");
-    logLine("[console] Switch Install Mode to Docker in Configuration or build workspace via 'Base install'.");
-  }
-
-  // Pre-flight check: Auto-detect and auto-install missing LiDAR driver
-  const laser = document.getElementById("bringup-laser-sensor")?.value || (state.config && state.config.laser_sensor);
-  if (laser && !isDockerMode()) {
-    openTerminal(`Checking LiDAR Driver: ${laser}`);
-    const driverOk = await checkAndInstallLidarDriver(laser);
-    if (!driverOk) {
-      logLine(`[console] ⚠ LiDAR driver check failed for '${laser}'. Continuing bringup anyway...`);
+    logLine("[console] [1-Click] Step 2: Workspace not built -- auto-building linorobot2 base...");
+    const buildOk = await checkAndBuildWorkspace();
+    if (!buildOk) {
+      logLine("[console] ✖ [1-Click] Workspace build failed. Aborting " + targetTitle + ".");
+      throw new Error("Workspace build failed");
     }
   }
 
-  logLine("[console] Action requires Robot Bringup -- automatically starting Bringup in background...");
-  openTerminal("Robot Bringup (Auto-Started) [streaming]");
+  // 1-Click Intermediate Step 3: Auto-detect and auto-install missing LiDAR driver
+  const laser = document.getElementById("bringup-laser-sensor")?.value || (state.config && state.config.laser_sensor);
+  if (laser && !isDockerMode()) {
+    logLine(`[console] [1-Click] Step 3: Checking LiDAR driver for '${laser}'...`);
+    const driverOk = await checkAndInstallLidarDriver(laser);
+    if (!driverOk) {
+      logLine(`[console] ⚠ LiDAR driver setup failed for '${laser}'. Continuing bringup...`);
+    }
+  }
+
+  // 1-Click Intermediate Step 4: Check Nav2 / SLAM packages if launching Nav2/SLAM
+  const lowerTitle = (targetTitle || "").toLowerCase();
+  if (lowerTitle.includes("nav") || lowerTitle.includes("slam")) {
+    await ensureNav2Prerequisites(targetTitle);
+  }
+
+  // If Bringup is already running, we are ready!
+  if (isBringupAlive()) {
+    logLine("[console] ✓ Robot Bringup is already active. Ready for " + targetTitle + ".");
+    return;
+  }
+
+  // 1-Click Intermediate Step 5: Start Bringup in background and stream logs
+  logLine(`[console] [1-Click] Step 5: Automatically launching Robot Bringup in background for ${targetTitle}...`);
+  openTerminal("Robot Bringup (1-Click Auto-Started) [streaming]");
   attachBringupStream();
 
   const cmd = bringupLaunchCommand();
@@ -1256,7 +1310,7 @@ async function ensureBringupRunning() {
 
     runCommand(cmd, {
       slot: "bringup",
-      title: "Robot Bringup (Auto-Started)",
+      title: `Robot Bringup (${targetTitle})`,
       onDone: (exitCode) => {
         if (startBtn) startBtn.disabled = false;
         if (stopBtn) stopBtn.disabled = true;
@@ -1292,11 +1346,11 @@ async function ensureBringupRunning() {
         refreshStatus();
         logLine(
           alive
-            ? `[console] Robot Bringup detected after ${(waited / 1000).toFixed(1)}s. Proceeding with requested action...`
-            : `[console] Bringup not confirmed after ${(DEADLINE_MS / 1000)}s -- proceeding anyway. Check streaming logs above.`
+            ? `[console] ✓ Robot Bringup confirmed active after ${(waited / 1000).toFixed(1)}s. Launching ${targetTitle}...`
+            : `[console] ⚠ Bringup not confirmed after ${(DEADLINE_MS / 1000)}s -- proceeding with ${targetTitle} anyway. Check logs above.`
         );
-        // brief settle so nodes/agent finish binding before the caller launches
-        setTimeout(resolve, 2000);
+        // Settle delay so nodes/agent/TF tree bind before caller launches
+        setTimeout(resolve, 2500);
         return;
       }
       setTimeout(poll, 1000);
@@ -1305,6 +1359,65 @@ async function ensureBringupRunning() {
   });
 }
 
+
+// ---------- workspace auto-build & lidar driver auto-install ----------
+async function checkAndBuildWorkspace() {
+  if (isDockerMode()) return true;
+  await refreshStatus();
+  if (state.status && state.status.workspace_built) {
+    return true;
+  }
+  const workspace = ws();
+  openTerminal("Base Install & Workspace Build");
+  logLine("[console] -------------------------------------------------------------");
+  logLine(`[console] ⚠ Native workspace is not built yet (${workspace}/install/setup.bash missing).`);
+  logLine("[console] linorobot2_bringup and base packages must be built before bringup can run.");
+  logLine("[console] Automatically running Base Install & colcon build now...");
+  logLine("[console] -------------------------------------------------------------");
+
+  let cmd = null;
+  try {
+    const res = await fetch(`/api/workspace/build_cmd?ws=${encodeURIComponent(workspace)}&distro=${encodeURIComponent(getDistro())}`);
+    if (res.ok) {
+      const data = await res.json();
+      cmd = data.command;
+    }
+  } catch (_) {}
+
+  if (!cmd) {
+    cmd = [
+      `mkdir -p ${workspace}/src`,
+      `cd ${workspace}/src`,
+      gitCloneDistroSnippet("https://github.com/linorobot/linorobot2", "linorobot2"),
+      `touch linorobot2/linorobot2_gazebo/COLCON_IGNORE 2>/dev/null || true`,
+      `cd ${workspace}`,
+      `rosdep update 2>/dev/null || true`,
+      `rosdep install --from-paths src --ignore-src -y --skip-keys microxrcedds_agent 2>/dev/null || true`,
+      `colcon build --symlink-install`,
+    ].join(" && ");
+  }
+
+  const success = await new Promise((resolve) => {
+    runCommand(envPrefix() + cmd, {
+      title: "Base Install & colcon build",
+      action: "base install",
+      onDone: (exitCode) => {
+        if (exitCode === 0) {
+          logLine("[console] ✓ Base workspace installed and built successfully!");
+          resolve(true);
+        } else {
+          logLine(`[console] ✖ Base install failed with exit code ${exitCode}. Check output above.`);
+          resolve(false);
+        }
+      }
+    });
+  });
+
+  if (success) {
+    await refreshStatus();
+  }
+  return success;
+}
 
 // ---------- bringup log streaming & lidar driver auto-install ----------
 let bringupEventSource = null;
@@ -1407,6 +1520,13 @@ wireStartStop({
   slot: "bringup",
   title: "Bringup",
   buildCommand: async () => {
+    if (!isDockerMode() && state.status && state.status.workspace_built === false) {
+      const buildOk = await checkAndBuildWorkspace();
+      if (!buildOk) {
+        logLine("[console] ✖ Cannot start Bringup: workspace build did not succeed.");
+        throw new Error("Workspace build failed");
+      }
+    }
     const laser = document.getElementById("bringup-laser-sensor")?.value || (state.config && state.config.laser_sensor);
     if (laser && !isDockerMode()) {
       await checkAndInstallLidarDriver(laser);
