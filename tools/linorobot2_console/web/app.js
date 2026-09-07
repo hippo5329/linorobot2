@@ -2321,3 +2321,157 @@ if (document.readyState === "loading") {
 } else {
   initWorkflowSetup();
 }
+
+// =============================================================================
+// AUTOSTART ON BOOT CONTROLLER
+// =============================================================================
+async function refreshAutostartStatus(opts = {}) {
+  const pill = document.getElementById("autostart-status-pill");
+  const infoBox = document.getElementById("autostart-info-box");
+  const summaryText = document.getElementById("autostart-summary-text");
+  const detailsText = document.getElementById("autostart-details-text");
+
+  try {
+    const res = await fetch("/api/autostart/status").then(r => r.json());
+    if (pill) {
+      if (res.active) {
+        pill.textContent = "active & running";
+        pill.className = "pill pill-ok";
+      } else if (res.enabled) {
+        pill.textContent = "enabled on boot";
+        pill.className = "pill pill-starting";
+      } else {
+        pill.textContent = "disabled";
+        pill.className = "pill pill-off";
+      }
+    }
+    if (opts.showInfo && infoBox && summaryText && detailsText) {
+      infoBox.style.display = "block";
+      summaryText.textContent = `Service: ${res.service_name} | Enabled: ${res.enabled ? "YES" : "NO"} | Active: ${res.active ? "RUNNING" : "STOPPED"} | Lingering: ${res.lingering ? "ENABLED" : "OFF"}`;
+      detailsText.textContent = res.details || "No active process status available.";
+    }
+    return res;
+  } catch (err) {
+    if (pill) {
+      pill.textContent = "check error";
+      pill.className = "pill pill-off";
+    }
+    return { enabled: false, active: false, error: err.message };
+  }
+}
+
+async function enableBootAutostart() {
+  const btn = document.getElementById("btn-autostart-enable");
+  const stack = document.getElementById("autostart-stack-select")?.value || "full_nav2";
+  const mapPath = document.getElementById("autostart-map-path")?.value || "";
+  const distro = getDistro();
+  const mode = document.getElementById("hdr-install-mode")?.value || "native";
+  const agentEngine = getAgentEngine();
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Enabling...";
+  }
+
+  try {
+    const res = await fetch("/api/autostart/enable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stack,
+        map_path: mapPath,
+        distro,
+        mode,
+        agent_engine: agentEngine
+      })
+    }).then(r => r.json());
+
+    if (res.enabled) {
+      const infoBox = document.getElementById("autostart-info-box");
+      const summaryText = document.getElementById("autostart-summary-text");
+      const detailsText = document.getElementById("autostart-details-text");
+      if (infoBox && summaryText && detailsText) {
+        infoBox.style.display = "block";
+        summaryText.textContent = `✅ ${res.message}`;
+        detailsText.textContent = `Unit: ${res.service_path}\nScript: ${res.script_path}\n\nStack is set to launch on power-on automatically.`;
+      }
+    }
+    await refreshAutostartStatus();
+  } catch (err) {
+    alert("Failed to enable autostart: " + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "⚡ Enable Boot Autostart";
+    }
+  }
+}
+
+async function disableBootAutostart() {
+  const btn = document.getElementById("btn-autostart-disable");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Disabling...";
+  }
+
+  try {
+    const res = await fetch("/api/autostart/disable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    }).then(r => r.json());
+
+    const infoBox = document.getElementById("autostart-info-box");
+    const summaryText = document.getElementById("autostart-summary-text");
+    const detailsText = document.getElementById("autostart-details-text");
+    if (infoBox && summaryText && detailsText) {
+      infoBox.style.display = "block";
+      summaryText.textContent = `🛑 ${res.message}`;
+      detailsText.textContent = "Autostart on boot has been removed.";
+    }
+    await refreshAutostartStatus();
+  } catch (err) {
+    alert("Failed to disable autostart: " + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "🛑 Disable Autostart";
+    }
+  }
+}
+
+async function viewBootAutostartLogs() {
+  const infoBox = document.getElementById("autostart-info-box");
+  const summaryText = document.getElementById("autostart-summary-text");
+  const detailsText = document.getElementById("autostart-details-text");
+
+  try {
+    const res = await fetch("/api/autostart/logs").then(r => r.json());
+    if (infoBox && summaryText && detailsText) {
+      infoBox.style.display = "block";
+      summaryText.textContent = `📜 Journald Logs (linorobot2-autostart.service)`;
+      detailsText.textContent = res.logs || "No logs recorded.";
+    }
+  } catch (err) {
+    alert("Failed to read autostart logs: " + err.message);
+  }
+}
+
+function initAutostartListeners() {
+  const btnEnable = document.getElementById("btn-autostart-enable");
+  const btnDisable = document.getElementById("btn-autostart-disable");
+  const btnStatus = document.getElementById("btn-autostart-status");
+  const btnLogs = document.getElementById("btn-autostart-logs");
+
+  if (btnEnable) btnEnable.addEventListener("click", enableBootAutostart);
+  if (btnDisable) btnDisable.addEventListener("click", disableBootAutostart);
+  if (btnStatus) btnStatus.addEventListener("click", () => refreshAutostartStatus({ showInfo: true }));
+  if (btnLogs) btnLogs.addEventListener("click", viewBootAutostartLogs);
+
+  refreshAutostartStatus();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initAutostartListeners);
+} else {
+  initAutostartListeners();
+}

@@ -772,5 +772,35 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertIn("user", info)
         self.assertIn("uid", info)
 
+    def test_autostart_status_and_lifecycle(self):
+        status = server.get_autostart_status()
+        self.assertEqual(status["status"], "ok")
+        self.assertIn("has_service", status)
+        self.assertIn("enabled", status)
+        self.assertIn("lingering", status)
+        self.assertEqual(status["service_name"], "linorobot2-autostart.service")
+
+        # Test enable autostart logic (mock / generation)
+        res = server.enable_autostart({
+            "stack": "full_nav2",
+            "mode": "native",
+            "distro": "jazzy"
+        })
+        self.assertEqual(res["status"], "ok")
+        self.assertTrue(res["enabled"])
+        self.assertTrue(os.path.exists(res["script_path"]))
+        self.assertTrue(os.path.exists(res["service_path"]))
+
+        # Verify generated script content
+        with open(res["script_path"]) as sf:
+            s_content = sf.read()
+            self.assertIn("linorobot2_bringup", s_content)
+            self.assertIn("linorobot2_navigation", s_content)
+
+        # Test disable autostart
+        dis_res = server.disable_autostart()
+        self.assertEqual(dis_res["status"], "ok")
+        self.assertFalse(dis_res["enabled"])
+
 if __name__ == "__main__":
     unittest.main()

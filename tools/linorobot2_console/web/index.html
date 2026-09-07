@@ -719,6 +719,40 @@
       <button id="btn-agent-ensure" class="btn btn-primary">Find / build / launch agent</button>
       <button id="btn-agent-stop" class="btn btn-danger" disabled>Stop agent</button>
     </div>
+    <div class="card" id="card-robot-autostart">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h2 style="margin:0;">⚡ Robot Boot Autostart (Headless Daemon)</h2>
+        <span class="pill pill-unknown" id="autostart-status-pill">checking...</span>
+      </div>
+      <p class="hint">Enable automatic unattended startup of micro-ROS Agent, Robot Bringup, and Nav2 Navigation when the robot computer powers on (via Linux user systemd &amp; lingering). Survives reboots and reconnects without requiring SSH login or browser interaction.</p>
+      
+      <div class="row" style="gap:12px; flex-wrap:wrap;">
+        <label style="flex:1; min-width:220px;">Target Autostart Stack
+          <select id="autostart-stack-select">
+            <option value="full_nav2" selected>Full Autonomous Stack (Agent + Bringup + Nav2)</option>
+            <option value="agent_bringup">Sensors &amp; Teleop (micro-ROS Agent + Robot Bringup)</option>
+            <option value="agent_only">micro-ROS Agent Only</option>
+          </select>
+        </label>
+        <label style="flex:1; min-width:220px;">Navigation Map / Mode
+          <input type="text" id="autostart-map-path" placeholder="empty = SLAM online mapping mode">
+        </label>
+        <button type="button" class="btn pick-btn" data-pick="file" data-exts="yaml,yml" data-target="autostart-map-path" style="align-self:flex-end;">&#128193;</button>
+      </div>
+
+      <div class="row" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
+        <button type="button" id="btn-autostart-enable" class="btn btn-primary">⚡ Enable Boot Autostart</button>
+        <button type="button" id="btn-autostart-disable" class="btn btn-danger">🛑 Disable Autostart</button>
+        <button type="button" id="btn-autostart-status" class="btn">🔍 Check Status</button>
+        <button type="button" id="btn-autostart-logs" class="btn">📜 View Journal Logs</button>
+      </div>
+
+      <div id="autostart-info-box" style="margin-top:10px; display:none; background:#0c121e; border:1px solid var(--border-soft); border-radius:6px; padding:10px; font-size:12px;">
+        <div id="autostart-summary-text" style="color:#38bdf8; font-weight:600; margin-bottom:4px;"></div>
+        <pre id="autostart-details-text" style="margin:0; max-height:160px; overflow-y:auto; color:#94a3b8; font-family:var(--font-mono); font-size:11px;"></pre>
+      </div>
+    </div>
+
     <div class="card">
       <h2>ROS 2 Distribution &amp; Automation</h2>
       <div class="row">
