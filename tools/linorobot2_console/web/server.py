@@ -14,6 +14,7 @@ import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -37,13 +38,166 @@ except Exception:
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # tools/linorobot2_console/..
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(WEB_DIR, "console_config.json")
+CONFIG_PATH = os.path.join(WEB_DIR, "console_config.json")  # DEPRECATED: legacy migration source only
 CONFIG_DIR = os.path.join(os.path.dirname(WEB_DIR), "config")
 LINOROBOT2_ROOT = os.path.abspath(os.path.join(WEB_DIR, "../../.."))
 SUPPORTED_DISTROS = ["jazzy", "lyrical", "rolling"]  # Humble dropped upstream (linorobot)
 NAV2_CONFIG_PATH = os.path.join(WEB_DIR, "console_nav2_jazzy.yaml")
-LINOROBOT2_USER_CONFIG_DIR = os.path.expanduser("~/.config/linorobot2")
-ROBOT_CONFIG_YAML_PATH = os.path.join(LINOROBOT2_USER_CONFIG_DIR, "robot_config.yaml")
+
+# ---------------------------------------------------------------------------
+# Repo-based robot config: the single source of truth is
+#   <linorobot2>/config/<robot_name>_config.yaml
+# One file per robot (multi-robot). It carries a `console:` section (workflow
+# settings -- former console_config.json) plus the existing
+# linorobot2:/nav2:/ekf:/slam: sections. The active robot is named in
+# config/.active_robot. `~/.config/linorobot2/robot_config.yaml` is a legacy
+# migration source only (never written after migration).
+# ---------------------------------------------------------------------------
+ROBOT_CONFIGS_DIR = os.path.join(LINOROBOT2_ROOT, "config")
+ACTIVE_ROBOT_FILE = os.path.join(ROBOT_CONFIGS_DIR, ".active_robot")
+DEFAULT_ROBOT_NAME = "linorobot2"
+LEGACY_ROBOT_CONFIG_YAML_PATH = os.path.expanduser("~/.config/linorobot2/robot_config.yaml")
+
+
+def _robot_name_ok(name):
+    return bool(re.match(r"^[a-z0-9_]+$", name or ""))
+
+
+def get_active_robot_name():
+    """Name of the currently selected robot (config/.active_robot, default 'linorobot2')."""
+    try:
+        with open(ACTIVE_ROBOT_FILE) as f:
+            nm = f.read().strip()
+        if _robot_name_ok(nm):
+            return nm
+    except OSError:
+        pass
+    return DEFAULT_ROBOT_NAME
+
+
+def set_active_robot_name(name):
+    if not _robot_name_ok(name):
+        raise ValueError("invalid robot name: %r" % (name,))
+    os.makedirs(ROBOT_CONFIGS_DIR, exist_ok=True)
+    with open(ACTIVE_ROBOT_FILE, "w") as f:
+        f.write(name + "\n")
+    return name
+
+
+def get_robot_config_path(name=None):
+    """Absolute path of <linorobot2>/config/<name>_config.yaml for the given
+    (or active) robot."""
+    if not _robot_name_ok(name):
+        name = get_active_robot_name()
+    return os.path.join(ROBOT_CONFIGS_DIR, name + "_config.yaml")
+
+
+def list_robot_configs():
+    """[{name, path, active}] for every *_config.yaml in config/."""
+    active = get_active_robot_name()
+    out = []
+    try:
+        names = sorted(os.listdir(ROBOT_CONFIGS_DIR))
+    except OSError:
+        names = []
+    for fn in names:
+        if fn.endswith("_config.yaml") and not fn.startswith("."):
+            nm = fn[: -len("_config.yaml")]
+            out.append({
+                "name": nm,
+                "path": os.path.join(ROBOT_CONFIGS_DIR, fn),
+                "active": nm == active,
+            })
+    if not any(r["active"] for r in out):
+        out.append({
+            "name": active,
+            "path": get_robot_config_path(active),
+            "active": True,
+        })
+    return out
+
+
+def _git(*args, cwd=None):
+    """Run `git <args>` in the linorobot2 repo; stripped stdout, or '' on failure."""
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=cwd or LINOROBOT2_ROOT,
+            capture_output=True, text=True, timeout=5.0,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def collect_git_info():
+    """Snapshot of the linorobot2 checkout: short commit, branch, local
+    branches (current pinned first), dirty flag, last 10 commits."""
+    commits = []
+    log = _git("log", "-10", "--pretty=format:%h\x1f%s\x1f%an\x1f%ad\x1f%ar", "--date=short")
+    for line in log.splitlines():
+        f = line.split("\x1f")
+        if len(f) == 5:
+            commits.append({
+                "hash": f[0], "subject": f[1], "author": f[2],
+                "date": f[3], "reldate": f[4],
+            })
+    cur_branch = _git("rev-parse", "--abbrev-ref", "HEAD") or "(detached)"
+    branches = [
+        b for b in _git(
+            "for-each-ref", "--sort=-committerdate",
+            "--format=%(refname:short)", "refs/heads",
+        ).splitlines() if b
+    ]
+    if cur_branch in branches:
+        branches = [cur_branch] + [b for b in branches if b != cur_branch]
+    return {
+        "version": (_git("rev-parse", "--short=7", "HEAD") or "unknown")[:7],
+        "branch": cur_branch,
+        "branches": branches,
+        "dirty": bool(_git("status", "--porcelain")),
+        "commits": commits,
+    }
+
+
+def commit_robot_config_if_dirty(robot_name=None, action_label="action"):
+    """Flush the active robot config to disk, then `git add` + `git commit` it
+    on the current branch if it changed. Never raises -- a config-commit
+    failure must not block the robot action. Returns the new commit hash or ''.
+    """
+    robot_name = robot_name if _robot_name_ok(robot_name) else get_active_robot_name()
+    path = get_robot_config_path(robot_name)
+    try:
+        _flush_robot_config(robot_name)
+    except Exception:
+        pass
+    if not os.path.exists(path):
+        return ""
+    try:
+        subprocess.run(["git", "-C", LINOROBOT2_ROOT, "add", "--", path],
+                       capture_output=True, timeout=5.0)
+        changed = subprocess.run(
+            ["git", "-C", LINOROBOT2_ROOT, "diff", "--cached", "--quiet", "--", path],
+            capture_output=True, timeout=5.0,
+        ).returncode != 0
+        if not changed:
+            return ""
+        subprocess.run(
+            ["git", "-C", LINOROBOT2_ROOT, "commit", "-m",
+             "config(%s): auto-commit before %s" % (robot_name, action_label),
+             "--", path],
+            capture_output=True, timeout=10.0,
+        )
+        return (_git("rev-parse", "--short=7", "HEAD") or "")[:7]
+    except Exception:
+        return ""
+
+
+def _flush_robot_config(robot_name=None):
+    """Write the in-memory console config to the active robot's YAML file so a
+    subsequent git commit captures the exact settings used for an action."""
+    save_config(load_config(), robot_name=robot_name)
 
 
 def indent_block(text, spaces=2):
@@ -51,7 +205,7 @@ def indent_block(text, spaces=2):
     return "\n".join(pad + line if line.strip() else "" for line in text.splitlines())
 
 
-def generate_unified_yaml(lino_cfg, nav2_yaml, ekf_yaml, slam_yaml):
+def generate_unified_yaml(lino_cfg, nav2_yaml, ekf_yaml, slam_yaml, console_cfg=None):
     base = lino_cfg.get("base") or lino_cfg.get("base_type") or "2wd"
     laser = lino_cfg.get("laser_sensor") or lino_cfg.get("laser") or ""
     depth = lino_cfg.get("depth_sensor") or lino_cfg.get("depth") or ""
@@ -73,6 +227,16 @@ def generate_unified_yaml(lino_cfg, nav2_yaml, ekf_yaml, slam_yaml):
         "# Single config file for robot setup (kinematics, sensors, micro-ros) + Nav2 + EKF + SLAM",
         "# ==============================================================================",
         "",
+    ]
+    if console_cfg:
+        lines += [
+            "# ------------------------------------------------------------------------------",
+            "# Console workflow settings (ROS distro, install/agent engine, transport, ...)",
+            "# ------------------------------------------------------------------------------",
+            render_console_section(console_cfg),
+            "",
+        ]
+    lines += [
         "linorobot2:",
         f'  base: "{base}"',
         f'  laser_sensor: "{laser}"',
@@ -125,7 +289,7 @@ def parse_unified_yaml(text):
             parts = line.split(":", 1)
             key = parts[0].strip()
             indent = len(line) - len(line.lstrip())
-            if indent == 0 and key in ("linorobot2", "nav2", "ekf", "slam"):
+            if indent == 0 and key in ("console", "linorobot2", "nav2", "ekf", "slam"):
                 if current_section:
                     sections[current_section] = "\n".join(current_lines)
                 current_section = key
@@ -165,47 +329,103 @@ def parse_unified_yaml(text):
                 return "\n".join(l[min_indent:] if len(l) >= min_indent else l for l in lines)
         return sec_text
 
-    lino_cfg = {}
-    if "linorobot2" in sections:
-        for line in sections["linorobot2"].splitlines():
+    def _scalars(sec_text):
+        out = {}
+        for line in sec_text.splitlines():
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#") or ":" not in line:
                 continue
-            if ":" in line:
-                k, v = line.split(":", 1)
-                k = k.strip()
-                v = v.split("#")[0].strip().strip("'\"")
-                if v.lower() == "true":
-                    lino_cfg[k] = True
-                elif v.lower() == "false":
-                    lino_cfg[k] = False
-                elif v.isdigit():
-                    lino_cfg[k] = int(v)
-                else:
-                    lino_cfg[k] = v
+            k, v = line.split(":", 1)
+            k = k.strip()
+            v = v.split("#")[0].strip().strip("'\"")
+            if v.lower() == "true":
+                out[k] = True
+            elif v.lower() == "false":
+                out[k] = False
+            elif v.lstrip("-").isdigit():
+                out[k] = int(v)
+            else:
+                out[k] = v
+        return out
 
     return {
-        "linorobot2": lino_cfg,
+        "console": _scalars(sections.get("console", "")),
+        "linorobot2": _scalars(sections.get("linorobot2", "")),
         "nav2": deindent(sections.get("nav2", "")).strip(),
         "ekf": deindent(sections.get("ekf", "")).strip(),
         "slam": deindent(sections.get("slam", "")).strip(),
     }
 
 
+# Keys of DEFAULT_CONFIG persisted verbatim in the YAML `console:` section.
+# (defined here as a name; the value list is built after DEFAULT_CONFIG below)
+def _console_yaml_keys():
+    return list(DEFAULT_CONFIG.keys())
+
+
+def render_console_section(cfg):
+    """The top-level `console:` YAML block (workflow settings). Scalar only."""
+    lines = ["console:"]
+    for k in _console_yaml_keys():
+        v = cfg.get(k, DEFAULT_CONFIG[k])
+        if isinstance(v, bool):
+            lines.append("  %s: %s" % (k, "true" if v else "false"))
+        elif isinstance(v, (int, float)):
+            lines.append("  %s: %s" % (k, v))
+        else:
+            lines.append('  %s: "%s"' % (k, v))
+    return "\n".join(lines)
+
+
+def splice_yaml_section(text, section_name, section_block):
+    """Return `text` with the top-level `<section_name>:` block replaced by
+    `section_block` (no trailing newline). Inserts at the top if absent."""
+    section_block = section_block.rstrip("\n")
+    lines = (text or "").splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^%s:\s*$" % re.escape(section_name), ln) or ln.strip() == section_name + ":":
+            if len(ln) - len(ln.lstrip()) == 0:
+                start = i
+                break
+    if start is None:
+        prefix = section_block + "\n"
+        if text and not text.startswith("\n"):
+            prefix += "\n"
+        return prefix + (text or "")
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        ln = lines[j]
+        # Section ends at the first line that is neither blank nor indented
+        # (a column-0 comment or a new top-level key), so surrounding banner
+        # comments are preserved.
+        if ln.strip() and not ln.startswith((" ", "\t")):
+            end = j
+            break
+    # Trim trailing blank lines that belonged to the old section.
+    while end - 1 > start and not lines[end - 1].strip():
+        end -= 1
+    return "\n".join(lines[:start] + section_block.splitlines() + lines[end:])
+
+
 def get_unified_config(distro=None, base=None):
     distro = distro or detect_ros_distro()
     cfg = load_config()
     base = base or cfg.get("base_type", "2wd")
+    robot_config_path = get_robot_config_path()
 
-    if os.path.exists(ROBOT_CONFIG_YAML_PATH):
+    if os.path.exists(robot_config_path):
         try:
-            with open(ROBOT_CONFIG_YAML_PATH, "r") as f:
+            with open(robot_config_path, "r") as f:
                 content = f.read()
             parsed = parse_unified_yaml(content)
             lino = parsed.get("linorobot2") or {}
+            # Ensure the file always carries an up-to-date console: block.
+            if not parsed.get("console"):
+                content = splice_yaml_section(content, "console", render_console_section(cfg))
             return {
                 "yaml": content,
-                "path": ROBOT_CONFIG_YAML_PATH,
+                "path": robot_config_path,
                 "distro": distro,
                 "base": lino.get("base", base),
                 "linorobot2": lino,
@@ -231,10 +451,10 @@ def get_unified_config(distro=None, base=None):
     nav2_yaml = get_nav2_config(distro)
     ekf_yaml = get_ekf_config(base)
     slam_yaml = get_slam_config()
-    unified_yaml = generate_unified_yaml(lino_cfg, nav2_yaml, ekf_yaml, slam_yaml)
+    unified_yaml = generate_unified_yaml(lino_cfg, nav2_yaml, ekf_yaml, slam_yaml, console_cfg=cfg)
     return {
         "yaml": unified_yaml,
-        "path": ROBOT_CONFIG_YAML_PATH,
+        "path": robot_config_path,
         "distro": distro,
         "base": base,
         "linorobot2": lino_cfg,
@@ -278,7 +498,10 @@ def save_unified_config(unified_data, distro=None, base=None):
         cfg["agent_baud"] = str(lino_cfg["micro_ros_baudrate"])
     if "madgwick" in lino_cfg:
         cfg["madgwick"] = bool(lino_cfg["madgwick"])
-    save_config(cfg)
+    # Adopt any console: section carried in the incoming YAML.
+    for k, v in (parsed.get("console") or {}).items():
+        if k in DEFAULT_CONFIG:
+            cfg[k] = v
 
     # 2. Save Nav2 if present
     nav2_text = parsed.get("nav2", "")
@@ -295,14 +518,19 @@ def save_unified_config(unified_data, distro=None, base=None):
     if slam_text.strip():
         save_slam_config(slam_text)
 
-    # 5. Persist unified yaml to disk
-    os.makedirs(os.path.dirname(ROBOT_CONFIG_YAML_PATH), exist_ok=True)
-    with open(ROBOT_CONFIG_YAML_PATH, "w") as f:
+    # 5. Persist unified yaml to disk (always carries an up-to-date console: block)
+    if not (parsed.get("console")):
+        text = splice_yaml_section(text, "console", render_console_section(cfg))
+    robot_config_path = get_robot_config_path()
+    os.makedirs(os.path.dirname(robot_config_path), exist_ok=True)
+    with open(robot_config_path, "w") as f:
         f.write(text if text.endswith("\n") else text + "\n")
+    # Mirror the console: section into the flat cache used by load_config().
+    save_config(cfg)
 
     return {
         "status": "saved",
-        "path": ROBOT_CONFIG_YAML_PATH,
+        "path": robot_config_path,
         "distro": distro,
         "base": base,
         "linorobot2_updated": bool(lino_cfg),
@@ -1173,20 +1401,117 @@ def export_params_bundle(dest_dir, distros=None, base="2wd", depth_costmap="auto
     return {"dest_dir": dest_dir, "files": written, "count": len(written)}
 
 
-def load_config():
+def _coerce_console_types(sect):
+    """Match each value's type to its DEFAULT_CONFIG counterpart (the YAML
+    parser turns "8888" into an int; DEFAULT_CONFIG keeps agent_port a str)."""
+    out = {}
+    for k, v in sect.items():
+        if k not in DEFAULT_CONFIG:
+            continue
+        ref = DEFAULT_CONFIG[k]
+        if isinstance(ref, bool):
+            out[k] = v if isinstance(v, bool) else str(v).strip().lower() in ("true", "1", "yes")
+        elif isinstance(ref, str):
+            out[k] = str(v)
+        elif isinstance(ref, int):
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
+                out[k] = ref
+        else:
+            out[k] = v
+    return out
+
+
+def _read_console_section_from_yaml(path):
+    """Flat dict from the `console:` section of a robot config YAML, or None."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return None
+    sect = parse_unified_yaml(text).get("console") or {}
+    return _coerce_console_types(sect) or None
+
+
+def load_config(robot_name=None):
+    """Console workflow settings for the given (or active) robot.
+
+    Source of truth: the `console:` section of
+    <linorobot2>/config/<robot>_config.yaml. Falls back, in order, to the
+    legacy per-web console_config.json and then ~/.config/linorobot2/
+    robot_config.yaml so an un-migrated install still works.
+    """
     cfg = dict(DEFAULT_CONFIG)
-    if os.path.exists(CONFIG_PATH):
+    yaml_path = get_robot_config_path(robot_name)
+    from_yaml = _read_console_section_from_yaml(yaml_path)
+    if from_yaml:
+        cfg.update(from_yaml)
+    elif os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH) as f:
-                cfg.update(json.load(f))
+                cfg.update({k: v for k, v in json.load(f).items() if k in DEFAULT_CONFIG})
         except Exception:
             pass
+    elif os.path.exists(LEGACY_ROBOT_CONFIG_YAML_PATH):
+        legacy = _read_console_section_from_yaml(LEGACY_ROBOT_CONFIG_YAML_PATH)
+        if legacy:
+            cfg.update(legacy)
+    if cfg.get("workspace_path"):
+        cfg["workspace_path"] = os.path.expanduser(cfg["workspace_path"])
     return cfg
 
 
-def save_config(cfg):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+def save_config(cfg, robot_name=None):
+    """Persist console workflow settings into the active robot's YAML
+    `console:` section (creating the file if needed)."""
+    yaml_path = get_robot_config_path(robot_name)
+    os.makedirs(os.path.dirname(yaml_path), exist_ok=True)
+    try:
+        with open(yaml_path) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    new_text = splice_yaml_section(text, "console", render_console_section(cfg))
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+    with open(yaml_path, "w") as f:
+        f.write(new_text)
+
+
+def migrate_legacy_config():
+    """One-time move to repo-based config/<robot>_config.yaml.
+
+    Seeds config/<robot>_config.yaml with a `console:` section built from the
+    legacy web/console_config.json (the nav2:/ekf:/slam: sections are
+    regenerated on demand from the console's own working copies). Idempotent:
+    does nothing once any *_config.yaml exists in config/.
+    """
+    os.makedirs(ROBOT_CONFIGS_DIR, exist_ok=True)
+    if any(f.endswith("_config.yaml") for f in os.listdir(ROBOT_CONFIGS_DIR)):
+        return None
+    if not os.path.exists(CONFIG_PATH):
+        return None
+
+    try:
+        with open(CONFIG_PATH) as f:
+            legacy_json = json.load(f)
+    except Exception:
+        legacy_json = {}
+
+    robot_name = legacy_json.get("robot_name") or DEFAULT_ROBOT_NAME
+    if not _robot_name_ok(robot_name):
+        robot_name = DEFAULT_ROBOT_NAME
+    dest = get_robot_config_path(robot_name)
+
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update({k: v for k, v in legacy_json.items() if k in DEFAULT_CONFIG})
+    cfg["robot_name"] = robot_name
+    text = render_console_section(cfg) + "\n"
+    with open(dest, "w") as f:
+        f.write(text)
+    set_active_robot_name(robot_name)
+    return {"robot": robot_name, "path": dest}
 
 
 def get_host_ip():
@@ -2333,6 +2658,7 @@ class Handler(BaseHTTPRequestHandler):
             cfg = load_config()
             distro = detect_ros_distro()
             ws = cfg["workspace_path"]
+            git = collect_git_info()
             self._send_json({
                 "ros_distro": distro,
                 "supported_distros": SUPPORTED_DISTROS,
@@ -2346,12 +2672,27 @@ class Handler(BaseHTTPRequestHandler):
                 "bringup_alive_external": bringup_externally_alive(),
                 "main_busy": main_runner.is_busy(),
                 "web_dir": WEB_DIR,
+                "robot_name": get_active_robot_name(),
+                "robot_config_path": get_robot_config_path(),
+                "robots": list_robot_configs(),
+                "git_branch": git.get("branch", ""),
                 "config": cfg,
             })
             return
 
         if path == "/api/config":
             self._send_json(load_config())
+            return
+
+        if path == "/api/robots":
+            self._send_json({
+                "robots": list_robot_configs(),
+                "active": get_active_robot_name(),
+            })
+            return
+
+        if path == "/api/gitinfo":
+            self._send_json(collect_git_info())
             return
 
         if path == "/api/sensors":
@@ -2429,13 +2770,23 @@ class Handler(BaseHTTPRequestHandler):
 
         self._serve_static(path)
 
-    def _stream_command(self, command, runner):
+    def _stream_command(self, command, runner, action_label=None):
         if not command:
             self._send_json({"error": "Empty command"}, 400)
             return
         if runner.is_busy():
             self._send_json({"error": f"{runner.name} slot is already running a command"}, 409)
             return
+
+        # Auto-commit the active robot config on the current branch before the
+        # action runs -- git log then records exactly what config each run used.
+        # A no-op when the config file is unchanged; never blocks the action.
+        commit_hash = ""
+        if action_label:
+            try:
+                commit_hash = commit_robot_config_if_dirty(action_label=action_label)
+            except Exception:
+                commit_hash = ""
 
         self.close_connection = True
         self.send_response(200)
@@ -2456,6 +2807,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 client_gone["v"] = True
+
+        if commit_hash:
+            send_event("output", {"line": f"[console] auto-committed robot config @ {commit_hash} before {action_label}"})
 
         # cwd is intentionally NOT the configured workspace_path: that directory
         # may not exist yet (the base-install command's job is to create it),
@@ -2591,11 +2945,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"command": cmd})
             return
 
+        if path == "/api/robot/select":
+            name = (data.get("name") or "").strip()
+            if not _robot_name_ok(name):
+                self._send_json({"error": "invalid robot name (use [a-z0-9_])"}, 400)
+                return
+            set_active_robot_name(name)
+            if not os.path.exists(get_robot_config_path(name)):
+                save_config(dict(DEFAULT_CONFIG), robot_name=name)
+            self._send_json({
+                "status": "ok",
+                "active": name,
+                "robots": list_robot_configs(),
+                "config": load_config(),
+                "robot_config_path": get_robot_config_path(name),
+            })
+            return
+
+        if path == "/api/gitinfo/branch":
+            branch = (data.get("branch") or "").strip()
+            if not re.match(r"^[A-Za-z0-9._/-]+$", branch or ""):
+                self._send_json({"error": "invalid branch name"}, 400)
+                return
+            qb = shlex.quote(branch)
+            cmd = (
+                f'cd {shlex.quote(LINOROBOT2_ROOT)} && '
+                f'if git show-ref --verify --quiet refs/heads/{qb}; then '
+                f'git checkout {qb}; else git checkout -b {qb}; fi'
+            )
+            self._stream_command(cmd, main_runner, action_label=f"checkout {branch}")
+            return
+
         if path == "/api/exec":
             command = data.get("command", "")
             slot = data.get("slot", "main")
             runner = bringup_runner if slot == "bringup" else (agent_runner if slot == "agent" else main_runner)
-            self._stream_command(command, runner)
+            self._stream_command(command, runner, action_label=data.get("action") or slot)
             return
 
         if path == "/api/kill":
@@ -2607,7 +2992,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/bringup/exec":
             command = data.get("command", "")
-            self._stream_command(command, bringup_runner)
+            self._stream_command(command, bringup_runner, action_label=data.get("action") or "bringup")
             return
 
         if path == "/api/bringup/kill":
@@ -2617,7 +3002,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/agent/exec":
             command = data.get("command", "")
-            self._stream_command(command, agent_runner)
+            self._stream_command(command, agent_runner, action_label=data.get("action") or "agent")
             return
 
         if path == "/api/agent/port_check":
@@ -3117,8 +3502,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
-    if not os.path.exists(CONFIG_PATH):
-        save_config(DEFAULT_CONFIG)
+    try:
+        migrated = migrate_legacy_config()
+        if migrated:
+            print(f"[migrate] seeded {migrated['path']} (robot '{migrated['robot']}')")
+    except Exception as e:
+        print(f"[migrate] skipped: {e}")
+    if not os.path.exists(get_robot_config_path()):
+        save_config(dict(DEFAULT_CONFIG))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Linorobot2 Console serving on http://0.0.0.0:{port}")
     try:

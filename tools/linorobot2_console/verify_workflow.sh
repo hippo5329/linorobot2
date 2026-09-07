@@ -47,6 +47,22 @@ P /api/params/merge "{\"kind\":\"nav2\",\"distro\":\"$DISTRO\",\"target\":\"temp
   && ok "/api/params/merge dry-run" || no "/api/params/merge"
 P /api/sensor_install_cmd '{"kind":"laser","key":"ldlidar","skip_udev":true}' | grep -q ldlidar_stl_ros2 \
   && ok "/api/sensor_install_cmd" || no "/api/sensor_install_cmd"
+
+# Repo-based robot config: config/<robot>_config.yaml is the single source of truth.
+G /api/status | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["robot_name"];assert d["robot_config_path"].endswith("_config.yaml");assert "/config/" in d["robot_config_path"]' \
+  && ok "/api/status reports repo-based robot config" || no "/api/status robot_config_path"
+G /api/robots | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["active"];assert any(r["active"] for r in d["robots"])' \
+  && ok "/api/robots lists the active robot" || no "/api/robots"
+G /api/gitinfo | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["branch"];assert isinstance(d["branches"],list);assert isinstance(d["commits"],list)' \
+  && ok "/api/gitinfo branch + branches" || no "/api/gitinfo"
+P /api/robot/select '{"name":"verify_bot"}' | python3 -c 'import sys,json;d=json.load(sys.stdin);assert d["active"]=="verify_bot";assert d["robot_config_path"].endswith("verify_bot_config.yaml")' \
+  && ok "/api/robot/select creates + activates a robot" || no "/api/robot/select"
+P /api/robot/select '{"name":"Bad Name"}' | grep -q '"error"' \
+  && ok "/api/robot/select rejects invalid names" || no "/api/robot/select validation"
+P /api/gitinfo/branch '{"branch":"bad branch~!"}' | grep -q '"error"' \
+  && ok "/api/gitinfo/branch rejects invalid names" || no "/api/gitinfo/branch validation"
+P /api/robot/select '{"name":"linorobot2"}' >/dev/null
+rm -f "$REPO/config/verify_bot_config.yaml" "$REPO/config/.active_robot"
 kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true
 
 step "console docker-compose ($DISTRO)"

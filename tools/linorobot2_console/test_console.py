@@ -30,12 +30,24 @@ class TestLinorobot2Console(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_config_path = server.CONFIG_PATH
         self.orig_nav2_config_path = server.NAV2_CONFIG_PATH
+        self.orig_robot_configs_dir = server.ROBOT_CONFIGS_DIR
+        self.orig_active_robot_file = server.ACTIVE_ROBOT_FILE
+        self.orig_legacy_yaml = server.LEGACY_ROBOT_CONFIG_YAML_PATH
         server.CONFIG_PATH = os.path.join(self.temp_dir, "test_console_config.json")
         server.NAV2_CONFIG_PATH = os.path.join(self.temp_dir, "test_nav2_params.yaml")
+        # Repo-based robot config -> redirect into the temp dir so tests never
+        # touch the real <repo>/config/ tree.
+        server.ROBOT_CONFIGS_DIR = os.path.join(self.temp_dir, "config")
+        server.ACTIVE_ROBOT_FILE = os.path.join(server.ROBOT_CONFIGS_DIR, ".active_robot")
+        server.LEGACY_ROBOT_CONFIG_YAML_PATH = os.path.join(self.temp_dir, "legacy_robot_config.yaml")
+        os.makedirs(server.ROBOT_CONFIGS_DIR, exist_ok=True)
 
     def tearDown(self):
         server.CONFIG_PATH = self.orig_config_path
         server.NAV2_CONFIG_PATH = self.orig_nav2_config_path
+        server.ROBOT_CONFIGS_DIR = self.orig_robot_configs_dir
+        server.ACTIVE_ROBOT_FILE = self.orig_active_robot_file
+        server.LEGACY_ROBOT_CONFIG_YAML_PATH = self.orig_legacy_yaml
         if os.path.exists(self.temp_dir):
             for root, dirs, files in os.walk(self.temp_dir, topdown=False):
                 for f in files:
@@ -650,33 +662,31 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertIn("resolution: 0.05", parsed["slam"])
 
     def test_save_and_get_robot_config(self):
-        test_yaml_file = os.path.join(self.temp_dir, "test_robot_config.yaml")
-        orig_path = server.ROBOT_CONFIG_YAML_PATH
-        server.ROBOT_CONFIG_YAML_PATH = test_yaml_file
-        try:
-            cfg = {
-                "base": "4wd",
-                "laser_sensor": "ydlidar",
-                "depth_sensor": "astra",
-                "robot_name": "skid_steer_4wd",
-                "ros_domain_id": 7,
-                "micro_ros_transport": "serial",
-                "micro_ros_port": "/dev/ttyUSB0",
-                "micro_ros_baudrate": 921600,
-                "madgwick": False,
-            }
-            res = server.save_unified_config(cfg, distro="jazzy", base="4wd")
-            self.assertEqual(res["status"], "saved")
-            self.assertTrue(os.path.exists(test_yaml_file))
+        server.set_active_robot_name("skid_steer_4wd")
+        test_yaml_file = server.get_robot_config_path("skid_steer_4wd")
+        cfg = {
+            "base": "4wd",
+            "laser_sensor": "ydlidar",
+            "depth_sensor": "astra",
+            "robot_name": "skid_steer_4wd",
+            "ros_domain_id": 7,
+            "micro_ros_transport": "serial",
+            "micro_ros_port": "/dev/ttyUSB0",
+            "micro_ros_baudrate": 921600,
+            "madgwick": False,
+        }
+        res = server.save_unified_config(cfg, distro="jazzy", base="4wd")
+        self.assertEqual(res["status"], "saved")
+        self.assertTrue(os.path.exists(test_yaml_file))
 
-            loaded = server.get_unified_config(distro="jazzy", base="4wd")
-            self.assertEqual(loaded["base"], "4wd")
-            self.assertEqual(loaded["linorobot2"]["laser_sensor"], "ydlidar")
-            self.assertEqual(loaded["linorobot2"]["depth_sensor"], "astra")
-            self.assertEqual(loaded["linorobot2"]["micro_ros_baudrate"], 921600)
-            self.assertEqual(loaded["linorobot2"]["madgwick"], False)
-        finally:
-            server.ROBOT_CONFIG_YAML_PATH = orig_path
+        loaded = server.get_unified_config(distro="jazzy", base="4wd")
+        self.assertEqual(loaded["base"], "4wd")
+        self.assertEqual(loaded["linorobot2"]["laser_sensor"], "ydlidar")
+        self.assertEqual(loaded["linorobot2"]["depth_sensor"], "astra")
+        self.assertEqual(loaded["linorobot2"]["micro_ros_baudrate"], 921600)
+        self.assertEqual(loaded["linorobot2"]["madgwick"], False)
+        # config path is the repo-based per-robot file
+        self.assertTrue(loaded["path"].endswith("skid_steer_4wd_config.yaml"))
 
     def test_launch_bringup_loader_reads_robot_config(self):
         import launch_bringup
@@ -819,6 +829,111 @@ class TestLinorobot2Console(unittest.TestCase):
         self.assertIn("status", res_d)
         self.assertIn("installed", res_d)
         self.assertEqual(res_d["engine"], "docker")
+
+    # ------------------------------------------------------------------
+    # Repo-based robot config: Robot Name + Branch header
+    # ------------------------------------------------------------------
+    def test_active_robot_name_get_set_default(self):
+        self.assertEqual(server.get_active_robot_name(), "linorobot2")
+        server.set_active_robot_name("scout")
+        self.assertEqual(server.get_active_robot_name(), "scout")
+        self.assertTrue(os.path.exists(server.ACTIVE_ROBOT_FILE))
+        with self.assertRaises(ValueError):
+            server.set_active_robot_name("Bad Name!")
+
+    def test_get_robot_config_path_layout(self):
+        server.set_active_robot_name("gendrv")
+        p = server.get_robot_config_path()
+        self.assertEqual(p, os.path.join(server.ROBOT_CONFIGS_DIR, "gendrv_config.yaml"))
+        self.assertEqual(
+            server.get_robot_config_path("rover_x"),
+            os.path.join(server.ROBOT_CONFIGS_DIR, "rover_x_config.yaml"),
+        )
+
+    def test_load_save_config_roundtrip_via_yaml_console_section(self):
+        cfg = server.load_config()
+        cfg["ros_distro"] = "rolling"
+        cfg["install_mode"] = "podman"
+        cfg["agent_port"] = "7777"
+        cfg["ros_domain_id"] = 15
+        cfg["auto_bringup"] = False
+        server.save_config(cfg)
+        # persisted as a console: section in the active robot's yaml
+        with open(server.get_robot_config_path()) as _f:
+            text = _f.read()
+        self.assertIn("console:", text)
+        self.assertIn("ros_distro:", text)
+        loaded = server.load_config()
+        self.assertEqual(loaded["ros_distro"], "rolling")
+        self.assertEqual(loaded["install_mode"], "podman")
+        self.assertEqual(loaded["agent_port"], "7777")   # stays a str
+        self.assertEqual(loaded["ros_domain_id"], 15)     # stays an int
+        self.assertIs(loaded["auto_bringup"], False)      # stays a bool
+
+    def test_list_robot_configs(self):
+        server.save_config(server.load_config(), robot_name="linorobot2")
+        server.save_config(server.load_config(), robot_name="scout")
+        server.set_active_robot_name("scout")
+        robots = server.list_robot_configs()
+        names = {r["name"] for r in robots}
+        self.assertEqual(names, {"linorobot2", "scout"})
+        active = [r for r in robots if r["active"]]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["name"], "scout")
+
+    def test_migrate_legacy_console_config_json(self):
+        # No repo config yet; a legacy console_config.json exists.
+        with open(server.CONFIG_PATH, "w") as f:
+            json.dump({"robot_name": "legacybot", "ros_distro": "lyrical",
+                       "install_mode": "docker", "agent_baud": "500000"}, f)
+        res = server.migrate_legacy_config()
+        self.assertIsNotNone(res)
+        self.assertEqual(res["robot"], "legacybot")
+        self.assertTrue(os.path.exists(server.get_robot_config_path("legacybot")))
+        self.assertEqual(server.get_active_robot_name(), "legacybot")
+        loaded = server.load_config()
+        self.assertEqual(loaded["ros_distro"], "lyrical")
+        self.assertEqual(loaded["agent_baud"], "500000")
+        # idempotent
+        self.assertIsNone(server.migrate_legacy_config())
+
+    def test_collect_git_info_shape(self):
+        gi = server.collect_git_info()
+        for key in ("version", "branch", "branches", "dirty", "commits"):
+            self.assertIn(key, gi)
+        self.assertIsInstance(gi["branches"], list)
+        self.assertIsInstance(gi["commits"], list)
+
+    def test_commit_robot_config_if_dirty_noop_when_clean(self):
+        # Not a git repo path -> commit helper must never raise, returns ''.
+        server.save_config(server.load_config())
+        out = server.commit_robot_config_if_dirty(action_label="unit-test")
+        self.assertIsInstance(out, str)
+
+    def test_generate_unified_yaml_includes_console_section(self):
+        console_cfg = dict(server.DEFAULT_CONFIG)
+        console_cfg["ros_distro"] = "rolling"
+        text = server.generate_unified_yaml(
+            {"base": "2wd"}, "amcl:\n  ros__parameters:\n    x: 1",
+            "ekf_filter_node:\n  ros__parameters:\n    frequency: 50.0",
+            "slam_toolbox:\n  ros__parameters:\n    resolution: 0.05",
+            console_cfg=console_cfg,
+        )
+        self.assertIn("console:", text)
+        self.assertIn('ros_distro: "rolling"', text)
+        parsed = server.parse_unified_yaml(text)
+        self.assertEqual(parsed["console"].get("ros_distro"), "rolling")
+        self.assertEqual(parsed["linorobot2"].get("base"), "2wd")
+
+    def test_splice_yaml_section_replaces_and_inserts(self):
+        base = 'linorobot2:\n  base: "2wd"\n'
+        spliced = server.splice_yaml_section(base, "console", "console:\n  ros_distro: \"jazzy\"")
+        self.assertIn("console:", spliced)
+        self.assertIn('base: "2wd"', spliced)
+        # replace, not duplicate
+        again = server.splice_yaml_section(spliced, "console", "console:\n  ros_distro: \"rolling\"")
+        self.assertEqual(again.count("console:"), 1)
+        self.assertIn("rolling", again)
 
 if __name__ == "__main__":
     unittest.main()

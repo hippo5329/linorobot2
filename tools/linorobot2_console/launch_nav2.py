@@ -29,7 +29,27 @@ except ImportError:
     LaunchDescription = None
 
 
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/linorobot2/robot_config.yaml")
+def _default_config_path():
+    """Active robot's repo config: <linorobot2>/config/<name>_config.yaml.
+    Falls back to the legacy ~/.config/linorobot2/robot_config.yaml."""
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    cfg_dir = os.path.join(repo_root, "config")
+    name = "linorobot2"
+    try:
+        with open(os.path.join(cfg_dir, ".active_robot")) as f:
+            cand = f.read().strip()
+        if re.match(r"^[a-z0-9_]+$", cand):
+            name = cand
+    except OSError:
+        pass
+    repo_cfg = os.path.join(cfg_dir, name + "_config.yaml")
+    if os.path.isfile(repo_cfg):
+        return repo_cfg
+    legacy = os.path.expanduser("~/.config/linorobot2/robot_config.yaml")
+    return legacy if os.path.isfile(legacy) else repo_cfg
+
+
+DEFAULT_CONFIG_PATH = _default_config_path()
 
 def _load_robot_config_yaml(custom_path=None):
     cfg_file = custom_path or os.environ.get("ROBOT_CONFIG_FILE") or DEFAULT_CONFIG_PATH

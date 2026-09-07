@@ -1,0 +1,3 @@
+# Per-machine active-robot pointer written by the Linorobot2 Console.
+# The *_config.yaml robot files ARE tracked (auto-committed before each action).
+.active_robot

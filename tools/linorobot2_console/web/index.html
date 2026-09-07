@@ -56,6 +56,29 @@
         <button type="button" class="btn-mini" id="hdr-btn-agent-check" title="Check Agent Port Availability" style="margin-left:4px;">🔍</button>
       </div>
     </div>
+    <!-- Robot Name + Branch: config/<name>_config.yaml is the single source of truth -->
+    <div class="hdr-wf-row hdr-robot-row">
+      <div class="hdr-field hdr-wf-field" title="Robot name -> config/<name>_config.yaml (auto-committed before every action)">
+        <label for="hdr-robot-name">🤖 Robot:</label>
+        <input type="text" id="hdr-robot-name" class="hdr-input" placeholder="linorobot2"
+               pattern="[a-z0-9_]+" autocomplete="off" spellcheck="false"
+               title="Lowercase name, digits and underscore only">
+        <button type="button" id="btn-robot-menu" class="hdr-caret" aria-expanded="false"
+                aria-haspopup="listbox" title="Saved robot configs">▾</button>
+        <div id="robot-menu" class="branch-menu" role="listbox" hidden></div>
+      </div>
+      <div class="hdr-field hdr-wf-field" id="hdr-branch-field" title="Git branch this robot's config commits land on">
+        <label for="hdr-git-branch">⎇ Branch:</label>
+        <input type="text" id="hdr-git-branch" class="hdr-input" placeholder="console"
+               autocomplete="off" spellcheck="false"
+               title="Git branch for config commits (Enter to checkout)">
+        <button type="button" id="btn-branch-menu" class="hdr-caret" aria-expanded="false"
+                aria-haspopup="listbox" title="Local git branches">▾</button>
+        <div id="branch-menu" class="branch-menu" role="listbox" hidden></div>
+        <button type="button" id="btn-branch-to-name" class="hdr-info-btn"
+                title="Set branch = robot name and check it out">= name</button>
+      </div>
+    </div>
   </div>
 
   <div class="header-status-group">

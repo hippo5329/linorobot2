@@ -9,6 +9,10 @@ const state = {
   status: null,
   mainBusy: false,
   agentBusy: false,
+  robot_name: "linorobot2",
+  robots: [],
+  git_branch: "",
+  git_branches: [],
 };
 
 const consolePane = document.getElementById("console-pane");
@@ -52,14 +56,14 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 
 // ---------- generic SSE command runner ----------
 // slot: "main" -> /api/exec ; "agent" -> /api/agent/exec
-function runCommand(command, { slot = "main", title = "Running", onDone, onLine } = {}) {
+function runCommand(command, { slot = "main", title = "Running", action, onDone, onLine } = {}) {
   const endpoint = slot === "agent" ? "/api/agent/exec" : (slot === "bringup" ? "/api/bringup/exec" : "/api/exec");
   setConsoleTitle(title);
   logLine(`$ [${slot}] ${title}`);
   return fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ command }),
+    body: JSON.stringify({ command, slot, action: action || title }),
   }).then(async (response) => {
     if (response.status === 409) {
       logLine("[console] that slot is already busy -- stop the running action first.");
@@ -180,6 +184,19 @@ async function refreshStatus() {
     if (distroSel && s.ros_distro) {
       distroSel.value = s.ros_distro;
     }
+
+    // Robot name + branch header (don't clobber a field the user is editing)
+    if (s.robot_name) state.robot_name = s.robot_name;
+    if (Array.isArray(s.robots)) state.robots = s.robots;
+    if (typeof s.git_branch === "string") state.git_branch = s.git_branch;
+    const robotInput = document.getElementById("hdr-robot-name");
+    if (robotInput && document.activeElement !== robotInput) {
+      robotInput.value = state.robot_name;
+    }
+    const branchInput = document.getElementById("hdr-git-branch");
+    if (branchInput && document.activeElement !== branchInput) {
+      branchInput.value = state.git_branch;
+    }
     const cfgDistroSel = document.getElementById("cfg-ros-distro");
     if (cfgDistroSel && s.ros_distro) {
       cfgDistroSel.value = s.ros_distro;
@@ -256,6 +273,228 @@ async function refreshStatus() {
 }
 setInterval(refreshStatus, 4000);
 refreshStatus();
+
+// ---------- Robot Name + Branch header ----------
+// config/<robot>_config.yaml is the single source of truth; it is git
+// auto-committed on the active branch before every action (server-side).
+async function loadGitInfo() {
+  try {
+    const gi = await fetch("/api/gitinfo").then((r) => r.json());
+    state.git_branch = gi.branch || state.git_branch;
+    state.git_branches = gi.branches || [];
+    const branchInput = document.getElementById("hdr-git-branch");
+    if (branchInput && document.activeElement !== branchInput) branchInput.value = state.git_branch;
+  } catch (e) { /* ignore */ }
+}
+
+async function loadRobotList() {
+  try {
+    const r = await fetch("/api/robots").then((x) => x.json());
+    state.robots = r.robots || [];
+    state.robot_name = r.active || state.robot_name;
+  } catch (e) { /* ignore */ }
+}
+
+// Dropdown picker shared by the Robot and Branch header fields. Ported from
+// robot_config_engine's tested initBranchPicker(): the input itself opens the
+// list, ArrowUp/Down opens it, Escape closes it, typing filters it live, and
+// the entry matching the current value carries a green dot.
+function initHeaderPicker({ inputId, caretId, menuId, loadItems, onPick, emptyText }) {
+  const input = document.getElementById(inputId);
+  const caret = document.getElementById(caretId);
+  const menu = document.getElementById(menuId);
+  if (!input || !menu) return;
+
+  const close = () => {
+    menu.hidden = true;
+    if (caret) caret.setAttribute("aria-expanded", "false");
+  };
+
+  const pick = (name) => {
+    input.value = name;
+    close();
+    onPick(name);
+  };
+
+  const render = ({ items, current }) => {
+    if (!items.length) {
+      menu.innerHTML = `<div class="branch-empty">${escapeHtml(emptyText)}</div>`;
+      return;
+    }
+    const typed = input.value.trim();
+    menu.innerHTML = items.map((b) => `
+      <button type="button" role="option" class="branch-item${b === current ? " is-current" : ""}${b === typed ? " is-active" : ""}" data-name="${escapeHtml(b)}">
+        <span class="branch-cur-dot"></span><span>${escapeHtml(b)}</span>${
+          b === current ? '<span style="margin-left:auto;font-size:0.68rem;opacity:0.6">current</span>' : ""
+        }
+      </button>`).join("");
+    menu.querySelectorAll(".branch-item").forEach((btn) => {
+      btn.addEventListener("click", () => pick(btn.dataset.name));
+    });
+  };
+
+  const open = async () => {
+    menu.hidden = false;
+    if (caret) caret.setAttribute("aria-expanded", "true");
+    menu.innerHTML = `<div class="branch-empty">Loading…</div>`;
+    render(await loadItems());
+  };
+
+  input.addEventListener("click", (e) => { e.stopPropagation(); if (menu.hidden) open(); });
+  input.addEventListener("keydown", (e) => {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && menu.hidden) { e.preventDefault(); open(); }
+  });
+  if (caret) {
+    caret.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (menu.hidden) open(); else close();
+    });
+  }
+  // Re-filter the visible list as the user types.
+  input.addEventListener("input", () => {
+    if (menu.hidden) return;
+    const typed = input.value.trim().toLowerCase();
+    menu.querySelectorAll(".branch-item").forEach((btn) => {
+      btn.style.display = btn.dataset.name.toLowerCase().includes(typed) ? "" : "none";
+      btn.classList.toggle("is-active", btn.dataset.name === input.value.trim());
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target) && e.target !== input && e.target !== caret) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) { close(); input.blur(); }
+  });
+}
+
+async function selectRobot(name) {
+  name = (name || "").trim();
+  if (!name || !/^[a-z0-9_]+$/.test(name)) {
+    logLine(`[console] invalid robot name: "${name}" (use lowercase, digits, _)`);
+    const ri = document.getElementById("hdr-robot-name");
+    if (ri) ri.value = state.robot_name;
+    return;
+  }
+  if (name === state.robot_name) return;
+  try {
+    const res = await fetch("/api/robot/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then((r) => r.json());
+    if (res.error) { logLine(`[console] ${res.error}`); return; }
+    state.robot_name = res.active;
+    state.robots = res.robots || [];
+    state.config = res.config || state.config;
+    // Push the switched robot's workflow settings into the header selects.
+    const c = state.config || {};
+    const put = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+    put("hdr-distro-select", c.ros_distro);
+    put("hdr-install-mode", c.install_mode);
+    put("hdr-agent-engine", c.agent_engine);
+    put("install-mode", c.install_mode);
+    put("cfg-agent-engine", c.agent_engine);
+    logLine(`[console] active robot -> ${res.active}  (${res.robot_config_path})`);
+    refreshStatus();
+  } catch (e) {
+    logLine(`[console] robot select failed: ${e}`);
+  }
+}
+
+function checkoutBranch(branch) {
+  branch = (branch || "").trim();
+  if (!branch || !/^[A-Za-z0-9._/-]+$/.test(branch)) {
+    logLine(`[console] invalid branch name: "${branch}"`);
+    return;
+  }
+  if (branch === state.git_branch) return;
+  setConsoleTitle(`git checkout ${branch}`);
+  logLine(`$ git checkout ${branch}`);
+  fetch("/api/gitinfo/branch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ branch }),
+  }).then(async (response) => {
+    if (!response.ok || !response.body) {
+      logLine(`[console] checkout failed: HTTP ${response.status}`);
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop();
+      for (const chunk of parts) {
+        const m = /^data: (.*)$/m.exec(chunk);
+        if (!m) continue;
+        try {
+          const payload = JSON.parse(m[1]);
+          if (payload.line) logLine(payload.line);
+          if (typeof payload.exit_code === "number") {
+            logLine(`[console] checkout exited ${payload.exit_code}`);
+            loadGitInfo();
+            refreshStatus();
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+  }).catch((e) => logLine(`[console] checkout error: ${e}`));
+}
+
+function setupRobotBranchHeader() {
+  const robotInput = document.getElementById("hdr-robot-name");
+  const branchInput = document.getElementById("hdr-git-branch");
+  const toNameBtn = document.getElementById("btn-branch-to-name");
+  if (!robotInput || !branchInput) return;
+
+  robotInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); robotInput.blur(); }
+  });
+  robotInput.addEventListener("blur", () => selectRobot(robotInput.value));
+
+  branchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); checkoutBranch(branchInput.value); }
+  });
+
+  initHeaderPicker({
+    inputId: "hdr-robot-name",
+    caretId: "btn-robot-menu",
+    menuId: "robot-menu",
+    emptyText: "No saved robot configs.",
+    loadItems: async () => {
+      await loadRobotList();
+      return { items: state.robots.map((r) => r.name), current: state.robot_name };
+    },
+    onPick: selectRobot,
+  });
+
+  initHeaderPicker({
+    inputId: "hdr-git-branch",
+    caretId: "btn-branch-menu",
+    menuId: "branch-menu",
+    emptyText: "No local git branches.",
+    loadItems: async () => {
+      await loadGitInfo();
+      return { items: state.git_branches, current: state.git_branch };
+    },
+    onPick: checkoutBranch,
+  });
+
+  toNameBtn.addEventListener("click", () => {
+    const n = (robotInput.value || state.robot_name || "").trim();
+    if (!n) return;
+    branchInput.value = n;
+    checkoutBranch(n);
+  });
+
+  loadRobotList();
+  loadGitInfo();
+}
+setupRobotBranchHeader();
 
 // ---------- sensor registry (single source of truth) ----------
 // Everything sensor-related -- Install driver list, Bringup model codes, the
